@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, asyncio
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent_preflight import Preflight, RiskLevel, Reversibility, ActionType
@@ -129,6 +129,89 @@ def test_plain_render():
     print("PASS: plain_render")
 
 
+def test_async_intercept():
+    pf = Preflight()
+    @pf.intercept
+    async def async_fetch(url): return "data"
+
+    async def workflow():
+        await async_fetch("https://api.example.com")
+
+    plan = asyncio.get_event_loop().run_until_complete(
+        pf.async_dry_run(workflow, task="async test")
+    )
+    assert len(plan.actions) == 1
+    assert plan.actions[0].name == "async_fetch"
+    print("PASS: async_intercept")
+
+
+def test_async_recording():
+    pf = Preflight()
+    @pf.intercept
+    async def async_op(x): pass
+
+    async def run():
+        async with pf.async_recording(task="async rec") as rec:
+            await async_op(1)
+            await async_op(2)
+        return rec
+
+    rec = asyncio.get_event_loop().run_until_complete(run())
+    assert rec.plan is not None
+    assert len(rec.plan.actions) == 2
+    print("PASS: async_recording")
+
+
+def test_dependency_graph():
+    pf = Preflight()
+    @pf.intercept
+    def read_data(source): pass
+    @pf.intercept
+    def write_data(dest, content): pass
+    @pf.intercept
+    def delete_data(target): pass
+
+    def workflow():
+        read_data("users_table")
+        write_data("backup_table", "content")
+        delete_data("users_table")
+
+    plan = pf.dry_run(workflow, task="migrate data")
+    assert plan.dependency_graph is not None
+    assert not plan.dependency_graph.has_cycles
+    assert len(plan.dependency_graph.execution_order) == 3
+    print("PASS: dependency_graph")
+
+
+def test_delete_without_read_warning():
+    pf = Preflight()
+    @pf.intercept
+    def delete_records(table): pass
+
+    plan = pf.dry_run(lambda: delete_records("important_data"), task="cleanup")
+    assert any("blind delete" in w.lower() or "without prior READ" in w for w in plan.warnings)
+    print("PASS: delete_without_read_warning")
+
+
+def test_dependency_json_export():
+    import json
+    pf = Preflight()
+    @pf.intercept
+    def step_a(x): pass
+    @pf.intercept
+    def step_b(x): pass
+
+    def workflow():
+        step_a("input")
+        step_b("input")
+
+    plan = pf.dry_run(workflow, task="pipeline")
+    data = json.loads(plan.to_json())
+    assert "dependencies" in data
+    assert "execution_order" in data["dependencies"]
+    print("PASS: dependency_json_export")
+
+
 if __name__ == "__main__":
     test_basic_capture()
     test_no_execution()
@@ -141,5 +224,10 @@ if __name__ == "__main__":
     test_json_export()
     test_context_manager()
     test_plain_render()
+    test_async_intercept()
+    test_async_recording()
+    test_dependency_graph()
+    test_delete_without_read_warning()
+    test_dependency_json_export()
     print()
-    print("All 11 tests passed!")
+    print("All 16 tests passed!")

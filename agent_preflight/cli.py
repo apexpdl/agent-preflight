@@ -30,6 +30,22 @@ def main():
         _run_audit(args[1:])
         return
 
+    if args[0] == "enable":
+        _run_enable(args[1:])
+        return
+
+    if args[0] == "serve":
+        _run_serve(args[1:])
+        return
+
+    if args[0] == "dashboard":
+        _run_dashboard(args[1:])
+        return
+
+    if args[0] == "atf":
+        _run_atf_demo(args[1:])
+        return
+
     print(f"Unknown command: {args[0]}")
     print(_help_text())
     sys.exit(1)
@@ -37,45 +53,32 @@ def main():
 
 def _help_text():
     return """
-agent-preflight - Preview AI agent actions before execution.
+agent-preflight - Autonomous Trust Fabric for AI Agents
 
 Usage:
-    preflight demo            Run interactive demo with policy checks
-    preflight check <script>  Analyze a Python script's agent actions
-    preflight audit [path]    View audit trail
-    preflight version         Show version
-    preflight help            Show this help
+    preflight demo             Run interactive demo with policy checks
+    preflight check <script>   Analyze a Python script's agent actions
+    preflight audit [path]     View audit trail
+    preflight enable --openclaw  Enable ATF governance for OpenClaw
+    preflight serve [--port N]   Start the ATF Gateway API server
+    preflight dashboard [--port N]  Start the monitoring dashboard
+    preflight atf              Run ATF pipeline demo
+    preflight version          Show version
+    preflight help             Show this help
 
-Python API:
-    from agent_preflight import Preflight
+ATF Gateway API:
+    from agent_preflight.atf.gateway import ATFGateway, create_fastapi_app
 
-    pf = Preflight()
+    gateway = ATFGateway()
+    await gateway.initialize()
+    result = await gateway.intercept_and_execute(envelope)
 
-    @pf.intercept
-    def send_email(to, subject, body): ...
+OpenClaw Integration:
+    from agent_preflight.integrations.openclaw import enable_preflight
+    pf = enable_preflight()
+    safe_executor = pf.wrap_executor(original_executor)
 
-    plan = pf.dry_run(my_agent_fn, task="Send Q3 report")
-    print(pf.format(plan))
-
-    plan.approve()
-    plan.execute()
-
-Policy Engine:
-    from agent_preflight.policy import PolicyEngine, Policy
-
-    engine = PolicyEngine()
-    engine.add(Policy.deny("No drops").when_args_match(r"DROP TABLE"))
-    result = engine.evaluate(plan)
-
-Integrations:
-    # OpenAI
-    from agent_preflight.integrations.openai_hook import PreflightOpenAI
-
-    # Anthropic
-    from agent_preflight.integrations.anthropic_hook import PreflightAnthropic
-
-    # LangChain
-    from agent_preflight.integrations.langchain import PreflightCallbackHandler
+Modes: SAFE (default) | BALANCED | AGGRESSIVE | ENTERPRISE
 """
 
 
@@ -222,6 +225,188 @@ def _run_audit(args):
             f"  verdict={entry.verdict or 'N/A'}"
         )
     print()
+
+
+def _run_enable(args):
+    """Enable ATF governance for agent frameworks."""
+    if "--openclaw" in args:
+        print("\n  Enabling Agent Preflight ATF for OpenClaw...\n")
+        print("  Add this to your OpenClaw agent script:\n")
+        print("    from agent_preflight.integrations.openclaw import enable_preflight")
+        print("    pf = enable_preflight()")
+        print("    safe_executor = pf.wrap_executor(your_tool_executor)")
+        print()
+        print("  Or for async agents:")
+        print()
+        print("    pf = enable_preflight()")
+        print("    await pf.initialize()")
+        print("    result = await pf.intercept('tool_name', {'arg': 'val'})")
+        print()
+        print("  Modes: SAFE | BALANCED | AGGRESSIVE | ENTERPRISE")
+        print("    enable_preflight(mode=ExecutionMode.ENTERPRISE)")
+        print()
+    else:
+        print("Usage: preflight enable --openclaw")
+        print("  Prints integration instructions for OpenClaw agents.")
+        sys.exit(1)
+
+
+def _run_serve(args):
+    """Start the ATF Gateway API server."""
+    port = 8100
+    for i, arg in enumerate(args):
+        if arg == "--port" and i + 1 < len(args):
+            port = int(args[i + 1])
+
+    mode = "safe"
+    for i, arg in enumerate(args):
+        if arg == "--mode" and i + 1 < len(args):
+            mode = args[i + 1]
+
+    print(f"\n  Starting ATF Gateway on port {port} (mode: {mode})...")
+    print(f"  API docs: http://localhost:{port}/docs")
+    print(f"  Health: http://localhost:{port}/health\n")
+
+    try:
+        import uvicorn
+        from agent_preflight.atf.config import ATFConfig, ExecutionMode
+        from agent_preflight.atf.gateway import create_fastapi_app
+
+        config = ATFConfig.for_mode(ExecutionMode(mode))
+        app = create_fastapi_app(config)
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    except ImportError:
+        print("  Error: FastAPI and uvicorn required.")
+        print("  Install with: pip install agent-preflight[server]")
+        sys.exit(1)
+
+
+def _run_dashboard(args):
+    """Start the ATF monitoring dashboard."""
+    port = 8200
+    for i, arg in enumerate(args):
+        if arg == "--port" and i + 1 < len(args):
+            port = int(args[i + 1])
+
+    print(f"\n  Starting ATF Dashboard on port {port}...")
+    print(f"  Open: http://localhost:{port}\n")
+
+    try:
+        import uvicorn
+        from agent_preflight.dashboard.app import create_dashboard_app
+
+        app = create_dashboard_app()
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    except ImportError:
+        print("  Error: FastAPI and uvicorn required.")
+        print("  Install with: pip install agent-preflight[server]")
+        sys.exit(1)
+
+
+def _run_atf_demo(args):
+    """Run the ATF pipeline demo."""
+    import asyncio
+
+    async def demo():
+        from agent_preflight.atf.gateway import ATFGateway
+        from agent_preflight.atf.config import ATFConfig, ExecutionMode
+        from agent_preflight.atf.models import ActionEnvelope, StructuredIntent
+        from agent_preflight.atf.plugins import ALL_PLUGINS
+
+        config = ATFConfig.for_mode(ExecutionMode.SAFE, database_path=":memory:")
+        gateway = ATFGateway(config)
+        await gateway.initialize()
+        gateway.register_plugins([p() for p in ALL_PLUGINS])
+
+        print("\n  === ATF Pipeline Demo ===\n")
+
+        # Low-risk action
+        print("  [1] Low-risk action: read user profile")
+        envelope1 = ActionEnvelope(
+            agent_id="demo-agent",
+            tool_name="get_user_profile",
+            arguments={"user_id": "12345"},
+            intent=StructuredIntent(
+                goal="Fetch user profile data",
+                reasoning_summary="Need to display user info",
+                expected_state_changes=[],
+                irreversible=False,
+                estimated_cost=0.0,
+                confidence=0.95,
+            ),
+        )
+        r1 = await gateway.intercept_and_execute(envelope1)
+        print(f"      Verdict: {r1.verdict.value}")
+        print(f"      Risk: {r1.risk_assessment.score:.4f}")
+        print(f"      Time: {r1.total_pipeline_time_ms:.0f}ms")
+        print(f"      Summary: {r1.human_summary}")
+        if r1.passport:
+            print(f"      Passport: {r1.passport.passport_id[:16]}...")
+        print()
+
+        # High-risk action
+        print("  [2] High-risk action: delete production database")
+        envelope2 = ActionEnvelope(
+            agent_id="demo-agent",
+            tool_name="delete_database_records",
+            arguments={"query": "DELETE FROM users WHERE active=false", "database": "prod"},
+            resource_targets=["/prod/database"],
+            intent=StructuredIntent(
+                goal="Clean up inactive users from production database",
+                reasoning_summary="Remove users who haven't logged in for 1 year",
+                expected_state_changes=["users table row count decreases"],
+                irreversible=True,
+                estimated_cost=0.0,
+                confidence=0.6,
+            ),
+        )
+        r2 = await gateway.intercept_and_execute(envelope2)
+        print(f"      Verdict: {r2.verdict.value}")
+        print(f"      Risk: {r2.risk_assessment.score:.4f}")
+        print(f"      Flags: {r2.risk_assessment.flags}")
+        print(f"      Time: {r2.total_pipeline_time_ms:.0f}ms")
+        print(f"      Summary: {r2.human_summary}")
+        if r2.correction:
+            print(f"      Correction feedback:")
+            for s in r2.correction.suggestions[:3]:
+                print(f"        - {s}")
+        print()
+
+        # Financial action
+        print("  [3] Critical action: wire transfer")
+        envelope3 = ActionEnvelope(
+            agent_id="finance-bot",
+            tool_name="wire_transfer",
+            arguments={"amount": 50000, "to": "external-account", "currency": "USD"},
+            intent=StructuredIntent(
+                goal="Transfer funds to vendor",
+                reasoning_summary="Quarterly payment to cloud provider",
+                expected_state_changes=["account balance decreases by $50,000"],
+                external_calls=["banking-api.example.com"],
+                irreversible=True,
+                estimated_cost=50000,
+                confidence=0.85,
+            ),
+        )
+        r3 = await gateway.intercept_and_execute(envelope3)
+        print(f"      Verdict: {r3.verdict.value}")
+        print(f"      Risk: {r3.risk_assessment.score:.4f}")
+        print(f"      Flags: {r3.risk_assessment.flags}")
+        print(f"      Time: {r3.total_pipeline_time_ms:.0f}ms")
+        print(f"      Summary: {r3.human_summary}")
+        print()
+
+        # Stats
+        stats = await gateway.db.get_stats()
+        print("  === Pipeline Stats ===")
+        print(f"      Total actions: {stats['total_actions']}")
+        print(f"      Blocked: {stats['blocked_actions']}")
+        print(f"      Block rate: {stats['block_rate']:.0%}")
+        print(f"      Avg risk: {stats['average_risk_score']:.4f}")
+        print(f"      Avg time: {stats['average_pipeline_time_ms']:.0f}ms")
+        print()
+
+    asyncio.run(demo())
 
 
 if __name__ == "__main__":

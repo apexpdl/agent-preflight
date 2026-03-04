@@ -1,6 +1,11 @@
-"""Agent Preflight - Preview and validate AI agent actions before execution."""
+"""Agent Preflight — Autonomous Trust Fabric for AI Agents.
 
-__version__ = "0.2.0"
+Predictive consequence infrastructure: intercepts agent actions,
+scores risk, simulates outcomes, enforces policy, and issues
+signed Action Passports before execution.
+"""
+
+__version__ = "1.0.0"
 
 from agent_preflight.core import Preflight
 from agent_preflight.models import (

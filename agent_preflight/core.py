@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import functools
 from typing import Any, Callable, Optional
@@ -40,6 +41,17 @@ class Preflight:
     def _wrap(self, func: Callable, meta: dict[str, Any]) -> Callable:
         name = func.__name__
         self._intercepted[name] = func
+
+        if asyncio.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                if self._dry_run_mode:
+                    self._capture(name, func, args, kwargs, meta)
+                    return None
+                return await func(*args, **kwargs)
+            async_wrapper._preflight_name = name
+            async_wrapper._preflight_meta = meta
+            return async_wrapper
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -84,20 +96,8 @@ class Preflight:
             )
         self._captures.append(action)
 
-    def dry_run(self, run_fn=None, task=""):
-        """Execute in dry-run mode, capturing all intercepted calls."""
-        self._captures = []
-        self._sequence = 0
-        self._dry_run_mode = True
-
-        if run_fn is not None:
-            try:
-                run_fn()
-            except Exception:
-                pass
-
-        self._dry_run_mode = False
-
+    def _build_and_finalize(self, task: str) -> Plan:
+        """Build plan from captures and apply cost limit checks."""
         plan = Plan(
             actions=list(self._captures),
             task_description=task,
@@ -112,6 +112,38 @@ class Preflight:
             plan.overall_risk = RiskLevel.CRITICAL
 
         return plan
+
+    def dry_run(self, run_fn=None, task=""):
+        """Execute in dry-run mode, capturing all intercepted calls."""
+        self._captures = []
+        self._sequence = 0
+        self._dry_run_mode = True
+
+        if run_fn is not None:
+            try:
+                run_fn()
+            except Exception:
+                pass
+
+        self._dry_run_mode = False
+        return self._build_and_finalize(task)
+
+    async def async_dry_run(self, run_fn=None, task=""):
+        """Execute an async function in dry-run mode, capturing all intercepted calls."""
+        self._captures = []
+        self._sequence = 0
+        self._dry_run_mode = True
+
+        if run_fn is not None:
+            try:
+                result = run_fn()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                pass
+
+        self._dry_run_mode = False
+        return self._build_and_finalize(task)
 
     def capture(self, name, args=None, kwargs=None, executor=None):
         """Directly capture an action (for framework integrations)."""
@@ -153,6 +185,9 @@ class Preflight:
     def recording(self, task=""):
         return _RecordingContext(self, task)
 
+    def async_recording(self, task=""):
+        return _AsyncRecordingContext(self, task)
+
 
 class _RecordingContext:
     def __init__(self, pf, task):
@@ -167,6 +202,28 @@ class _RecordingContext:
         return self
 
     def __exit__(self, *args):
+        self._pf._dry_run_mode = False
+        self.plan = Plan(
+            actions=list(self._pf._captures),
+            task_description=self._task,
+            _executors=dict(self._pf._intercepted),
+        )
+        self.plan.finalize()
+
+
+class _AsyncRecordingContext:
+    def __init__(self, pf, task):
+        self._pf = pf
+        self._task = task
+        self.plan = None
+
+    async def __aenter__(self):
+        self._pf._captures = []
+        self._pf._sequence = 0
+        self._pf._dry_run_mode = True
+        return self
+
+    async def __aexit__(self, *args):
         self._pf._dry_run_mode = False
         self.plan = Plan(
             actions=list(self._pf._captures),

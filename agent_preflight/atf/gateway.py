@@ -26,6 +26,7 @@ from agent_preflight.atf.models import (
 from agent_preflight.atf.passport import PassportAuthority
 from agent_preflight.atf.policy_v2 import YAMLPolicyEngine
 from agent_preflight.atf.risk_engine import RiskEngine
+from agent_preflight.atf.risk_memory import RiskMemory
 from agent_preflight.atf.simulation import SimulationEngine
 
 
@@ -53,6 +54,7 @@ class ATFGateway:
         self.policy_engine = YAMLPolicyEngine()
         self.drift_engine: Optional[DriftIntelligenceEngine] = None
         self.feedback_generator = FeedbackGenerator()
+        self.risk_memory = RiskMemory()
         self._tool_registry: dict[str, Callable] = {}
         self._initialized = False
 
@@ -114,7 +116,17 @@ class ATFGateway:
             )
             drift_similarity = drift_insight.similarity_score
 
-        # 3. Risk scoring
+        # 2b. Risk Memory recall — learn from past decisions
+        memory_recall = self.risk_memory.recall(
+            envelope.tool_name, envelope.arguments
+        )
+        if memory_recall.memory_flags:
+            drift_similarity = max(
+                drift_similarity,
+                drift_similarity + memory_recall.risk_adjustment,
+            )
+
+        # 3. Risk scoring (informed by memory + drift)
         risk = await self.risk_engine.assess(envelope, drift_similarity)
 
         # 4. Simulation (if configured and risk warrants it)
@@ -176,7 +188,17 @@ class ATFGateway:
         # 11. Store risk assessment
         await self.db.store_risk(envelope.action_id, risk.model_dump())
 
-        # 12. Record drift outcome
+        # 12. Record in Risk Memory (Preflight learns from every decision)
+        self.risk_memory.record(
+            tool_name=envelope.tool_name,
+            arguments=envelope.arguments,
+            risk_score=risk.score,
+            verdict=verdict.value,
+            flags=risk.flags,
+            agent_id=envelope.agent_id,
+        )
+
+        # 13. Record drift outcome
         if self.drift_engine:
             await self.drift_engine.record_outcome(
                 fingerprint=envelope.fingerprint(),
@@ -189,6 +211,7 @@ class ATFGateway:
 
         elapsed = (time.perf_counter() - start) * 1000
 
+        # 14. Build pipeline result
         result = PipelineResult(
             action_id=envelope.action_id,
             verdict=verdict,
@@ -203,7 +226,7 @@ class ATFGateway:
             total_pipeline_time_ms=round(elapsed, 3),
         )
 
-        # 13. Log pipeline result
+        # 15. Log pipeline result
         await self.db.store_pipeline_log({
             "action_id": envelope.action_id,
             "agent_id": envelope.agent_id,

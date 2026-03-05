@@ -33,19 +33,27 @@ _SENSITIVE_PATHS = [
 # ---------------------------------------------------------------------------
 
 _DESTRUCTIVE_TOOLS = re.compile(
-    r"(delete|drop|truncate|remove|purge|destroy|kill|terminate|format|wipe|rm)",
+    r"(delete|drop|truncate|remove|purge|destroy|kill|terminate|format|wipe|rm|erase|clear_all)",
     re.IGNORECASE,
 )
 _NETWORK_TOOLS = re.compile(
-    r"(send|email|slack|webhook|notify|post|push|publish|broadcast|sms)",
+    r"(send|email|slack|webhook|notify|post|push|publish|broadcast|sms|tweet|dm|reply_all)",
     re.IGNORECASE,
 )
 _FINANCIAL_TOOLS = re.compile(
-    r"(pay|transfer|charge|invoice|refund|purchase|wire|withdraw|debit|credit)",
+    r"(pay|transfer|charge|invoice|refund|purchase|wire|withdraw|debit|credit|bill|fund|remit)",
     re.IGNORECASE,
 )
 _SHELL_TOOLS = re.compile(
-    r"(exec|shell|bash|system|subprocess|eval|run_command|os\.system)",
+    r"(exec|shell|bash|system|subprocess|eval|run_command|os\.system|spawn|popen|sh_run)",
+    re.IGNORECASE,
+)
+_MASS_TOOLS = re.compile(
+    r"(bulk|batch|mass|all|every|flush|reset|migrate|seed|provision|deploy)",
+    re.IGNORECASE,
+)
+_FILESYSTEM_WRITE_TOOLS = re.compile(
+    r"(write_file|overwrite|save_file|create_file|move_file|rename|chmod|chown|mkdir|rmdir)",
     re.IGNORECASE,
 )
 
@@ -54,19 +62,37 @@ _SHELL_TOOLS = re.compile(
 # ---------------------------------------------------------------------------
 
 _WEIGHTS: dict[str, float] = {
+    # ALWAYS HIGH RISK (opinionated defaults)
     "irreversible": 3.0,
     "destructive_tool": 2.5,
     "financial_tool": 2.8,
     "shell_tool": 2.2,
+    "mass_operation": 2.3,
+    "filesystem_write": 1.8,
+    "dangerous_args": 2.5,
+    # MEDIUM RISK
     "network_tool": 1.5,
     "sensitive_path": 2.0,
     "high_cost": 1.8,
     "low_confidence": 1.5,
+    # CONTEXTUAL
     "wide_scope": 1.2,
     "drift_similarity": 2.0,
     "external_calls": 1.3,
     "multiple_state_changes": 1.0,
 }
+
+# Dangerous argument patterns (SQL injection, shell injection, path traversal)
+_DANGEROUS_ARG_PATTERNS = [
+    re.compile(r"\bDROP\s+(TABLE|DATABASE|SCHEMA)\b", re.IGNORECASE),
+    re.compile(r"\bDELETE\s+FROM\b(?!.*\bWHERE\b)", re.IGNORECASE),
+    re.compile(r"\bTRUNCATE\b", re.IGNORECASE),
+    re.compile(r"\brm\s+-rf\b", re.IGNORECASE),
+    re.compile(r"\brm\s+-r\b", re.IGNORECASE),
+    re.compile(r"\b(sudo|chmod\s+777)\b", re.IGNORECASE),
+    re.compile(r"\.\./\.\.", re.IGNORECASE),  # path traversal
+    re.compile(r";\s*(rm|del|drop|shutdown|reboot)", re.IGNORECASE),  # command injection
+]
 
 _BIAS = -2.0  # Base bias — shifts sigmoid so low-risk actions stay low
 
@@ -129,6 +155,16 @@ class RiskEngine:
             features["network_tool"] = 1.0
             flags.append("external_communication")
 
+        # Feature: mass/bulk operations
+        if _MASS_TOOLS.search(envelope.tool_name):
+            features["mass_operation"] = 1.0
+            flags.append("mass_operation")
+
+        # Feature: filesystem writes
+        if _FILESYSTEM_WRITE_TOOLS.search(envelope.tool_name):
+            features["filesystem_write"] = 1.0
+            flags.append("filesystem_write")
+
         # Feature: sensitive paths in arguments or targets
         all_targets = " ".join(
             envelope.resource_targets
@@ -169,6 +205,14 @@ class RiskEngine:
         if n_external > 0:
             features["external_calls"] = min(n_external / 5, 1.0)
             flags.append(f"external_calls_{n_external}")
+
+        # Feature: dangerous argument content (SQL injection, rm -rf, etc.)
+        args_text = " ".join(str(v) for v in envelope.arguments.values())
+        for pattern in _DANGEROUS_ARG_PATTERNS:
+            if pattern.search(args_text):
+                features["dangerous_args"] = 1.0
+                flags.append("dangerous_args")
+                break
 
         # Feature: drift similarity to known failures
         if drift_similarity > 0.3:

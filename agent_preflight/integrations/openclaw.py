@@ -158,13 +158,16 @@ class OpenClawPreflight:
         # Update stats
         self._stats["total"] += 1
 
-        # Smart interruption logic
+        # Smart interruption logic with visual output
         if result.verdict == Verdict.BLOCK:
             self._stats["blocked"] += 1
+            self._display_interception(tool_name, result)
             if self._on_block:
                 self._on_block(result)
         elif result.verdict == Verdict.WARN:
             self._stats["warned"] += 1
+            if not self._silent:
+                self._display_interception(tool_name, result)
             if self._on_warn:
                 self._on_warn(result)
         else:
@@ -173,6 +176,34 @@ class OpenClawPreflight:
                 self._on_allow(result)
 
         return result.to_agent_response()
+
+    def _display_interception(self, tool_name: str, result) -> None:
+        """Print the screenshot-worthy interception display."""
+        from agent_preflight.display import render_interception
+
+        sim_data = None
+        if result.simulation_result:
+            sim_data = {
+                "failure_probability": result.simulation_result.failure_probability,
+                "cascade_risk": result.simulation_result.cascade_probability,
+            }
+
+        correction_data = None
+        if result.correction:
+            correction_data = result.correction.model_dump()
+
+        output = render_interception(
+            tool_name=tool_name,
+            verdict=result.verdict.value,
+            risk_score=result.risk_assessment.score,
+            flags=result.risk_assessment.flags,
+            human_summary=result.human_summary,
+            correction=correction_data,
+            pipeline_time_ms=result.total_pipeline_time_ms,
+            passport_id=result.passport.passport_id if result.passport else "",
+            simulation=sim_data,
+        )
+        print(output, file=sys.stderr)
 
     def wrap_executor(self, executor: Callable) -> Callable:
         """Wrap an OpenClaw tool executor with ATF governance.

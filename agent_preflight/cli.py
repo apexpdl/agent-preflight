@@ -13,74 +13,256 @@ def main():
         print(_help_text())
         return
 
-    if args[0] == "version":
-        from . import __version__
-        print(f"agent-preflight v{__version__}")
-        return
+    cmd = args[0]
+    rest = args[1:]
 
-    if args[0] == "demo":
-        _run_demo()
-        return
+    commands = {
+        "version": _run_version,
+        "demo": lambda a: _run_demo(),
+        "check": _run_check,
+        "audit": _run_audit,
+        "enable": _run_enable,
+        "serve": _run_serve,
+        "dashboard": _run_dashboard,
+        "atf": _run_atf_demo,
+        "auto": _run_auto,
+        "status": _run_status,
+        "explain": _run_explain,
+        "doctor": _run_doctor,
+    }
 
-    if args[0] == "check":
-        _run_check(args[1:])
-        return
-
-    if args[0] == "audit":
-        _run_audit(args[1:])
-        return
-
-    if args[0] == "enable":
-        _run_enable(args[1:])
-        return
-
-    if args[0] == "serve":
-        _run_serve(args[1:])
-        return
-
-    if args[0] == "dashboard":
-        _run_dashboard(args[1:])
-        return
-
-    if args[0] == "atf":
-        _run_atf_demo(args[1:])
-        return
-
-    if args[0] == "auto":
-        _run_auto(args[1:])
-        return
-
-    print(f"Unknown command: {args[0]}")
-    print(_help_text())
-    sys.exit(1)
+    if cmd in commands:
+        commands[cmd](rest)
+    else:
+        print(f"Unknown command: {cmd}")
+        print(_help_text())
+        sys.exit(1)
 
 
 def _help_text():
     return """
-agent-preflight - Stop your AI agent before it destroys something.
+  ▲ Preflight — Stop your AI agent before it destroys something.
 
-Usage:
-    preflight demo               Interactive demo with policy checks
-    preflight atf                Full ATF pipeline demo
-    preflight auto               Auto-detect and enable for all frameworks
-    preflight serve [--port N]   Start the ATF Gateway API server
-    preflight dashboard [--port N]  Start the monitoring dashboard
-    preflight check <script>     Analyze a Python script's agent actions
-    preflight audit [path]       View audit trail
-    preflight enable --openclaw  Enable ATF governance for OpenClaw
-    preflight version            Show version
-    preflight help               Show this help
+  Usage:
+    preflight demo                 Interactive demo with policy checks
+    preflight atf                  Full ATF pipeline demo (screenshot-worthy)
+    preflight status               Show Preflight status and session stats
+    preflight explain <tool>       Explain why a tool would be flagged
+    preflight doctor               Check your setup and diagnose issues
+    preflight auto                 Auto-detect and enable for all frameworks
+    preflight serve [--port N]     Start the ATF Gateway API server
+    preflight dashboard [--port N] Start the monitoring dashboard
+    preflight check <script>       Analyze a Python script's agent actions
+    preflight audit [path]         View audit trail
+    preflight enable --openclaw    Show OpenClaw integration guide
+    preflight version              Show version
+    preflight help                 Show this help
 
-Quick Start (OpenClaw):
+  Quick Start:
     from agent_preflight.integrations.openclaw import enable_preflight
     enable_preflight()  # done. every tool call is now safe.
 
-Quick Start (Any Framework):
-    from agent_preflight.auto import enable
-    enable()  # auto-detects and wraps installed frameworks
+  Zero-Config:
+    PREFLIGHT_AUTO=1 python my_agent.py
 
-Modes: SAFE (default) | BALANCED | AGGRESSIVE | ENTERPRISE
+  Modes: SAFE (default) | BALANCED | AGGRESSIVE | ENTERPRISE
 """
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+def _run_version(args):
+    from . import __version__
+    from .display import render_startup_banner
+    print(render_startup_banner(), end="")
+    print(f"  Version: {__version__}")
+    print()
+
+
+def _run_status(args):
+    """Show Preflight status: what's detected, what's active, session stats."""
+    from .display import render_startup_banner, render_stats
+    from .auto import detect_frameworks, status as auto_status
+
+    print(render_startup_banner())
+
+    # Detection
+    frameworks = detect_frameworks()
+    auto = auto_status()
+
+    print("  Installed frameworks:")
+    if frameworks:
+        for f in frameworks:
+            print(f"    ● {f}")
+    else:
+        print("    (none detected)")
+    print()
+
+    print("  Auto-detection:")
+    if auto["enabled"]:
+        print(f"    Active for: {', '.join(auto['detected_frameworks'])}")
+    else:
+        print("    Not active. Run: preflight auto")
+    print()
+
+    # Check env
+    env_auto = os.environ.get("PREFLIGHT_AUTO", "")
+    print("  Environment:")
+    if env_auto in ("1", "true", "yes"):
+        print("    PREFLIGHT_AUTO=1 (zero-config mode ON)")
+    else:
+        print("    PREFLIGHT_AUTO not set")
+        print("    Set it for zero-config: export PREFLIGHT_AUTO=1")
+    print()
+
+
+def _run_explain(args):
+    """Explain why a tool name would be flagged by the risk engine."""
+    if not args:
+        print("Usage: preflight explain <tool_name>")
+        print("  Example: preflight explain delete_database_records")
+        print("  Example: preflight explain get_user_profile")
+        return
+
+    import asyncio
+    from .atf.risk_engine import RiskEngine
+    from .atf.models import ActionEnvelope, StructuredIntent
+
+    tool_name = args[0]
+
+    # Build a test envelope
+    envelope = ActionEnvelope(
+        agent_id="explain-test",
+        tool_name=tool_name,
+        arguments={},
+        intent=StructuredIntent(
+            goal=f"Execute {tool_name}",
+            reasoning_summary="Risk explanation test",
+            confidence=0.7,
+        ),
+    )
+
+    engine = RiskEngine()
+
+    async def _assess():
+        return await engine.assess(envelope)
+
+    risk = asyncio.run(_assess())
+
+    from .display import render_interception
+    output = render_interception(
+        tool_name=tool_name,
+        verdict="block" if risk.score >= 0.6 else ("warn" if risk.score >= 0.3 else "allow"),
+        risk_score=risk.score,
+        flags=risk.flags,
+        human_summary=f"Risk analysis for tool '{tool_name}'",
+        pipeline_time_ms=risk.computation_time_ms,
+    )
+    print(output)
+
+    if risk.breakdown:
+        print("  Risk breakdown:")
+        for feature, contribution in sorted(risk.breakdown.items(), key=lambda x: -x[1]):
+            bar_len = int(contribution * 10)
+            bar = "█" * bar_len
+            print(f"    {feature:<25} +{contribution:.2f}  {bar}")
+        print()
+
+    if not risk.flags:
+        print("  This tool name has no risk signals. It would pass silently.")
+        print()
+
+
+def _run_doctor(args):
+    """Diagnose setup issues and verify everything is working."""
+    from .display import render_startup_banner
+    print(render_startup_banner())
+    print("  Running diagnostics...\n")
+
+    checks = []
+
+    # Check 1: pydantic
+    try:
+        import pydantic
+        checks.append(("Pydantic installed", True, f"v{pydantic.__version__}"))
+    except ImportError:
+        checks.append(("Pydantic installed", False, "pip install pydantic>=2.0"))
+
+    # Check 2: ATF models
+    try:
+        from agent_preflight.atf.models import ActionEnvelope, StructuredIntent
+        checks.append(("ATF models loadable", True, ""))
+    except Exception as e:
+        checks.append(("ATF models loadable", False, str(e)))
+
+    # Check 3: Risk engine
+    try:
+        import asyncio
+        from agent_preflight.atf.risk_engine import RiskEngine
+        from agent_preflight.atf.models import ActionEnvelope, StructuredIntent
+        engine = RiskEngine()
+        envelope = ActionEnvelope(
+            agent_id="test", tool_name="test_tool", arguments={},
+            intent=StructuredIntent(goal="test", reasoning_summary="test"),
+        )
+        risk = asyncio.run(engine.assess(envelope))
+        checks.append(("Risk engine working", True, f"test score: {risk.score:.4f}"))
+    except Exception as e:
+        checks.append(("Risk engine working", False, str(e)))
+
+    # Check 4: Gateway
+    try:
+        from agent_preflight.atf.gateway import ATFGateway
+        checks.append(("ATF Gateway importable", True, ""))
+    except Exception as e:
+        checks.append(("ATF Gateway importable", False, str(e)))
+
+    # Check 5: FastAPI (optional)
+    try:
+        import fastapi
+        checks.append(("FastAPI available", True, f"v{fastapi.__version__}"))
+    except ImportError:
+        checks.append(("FastAPI available", False, "pip install agent-preflight[server]"))
+
+    # Check 6: Agent frameworks
+    from agent_preflight.auto import detect_frameworks
+    frameworks = detect_frameworks()
+    if frameworks:
+        checks.append(("Agent frameworks detected", True, ", ".join(frameworks)))
+    else:
+        checks.append(("Agent frameworks detected", False, "None found (install openclaw, langchain, etc.)"))
+
+    # Check 7: Risk Memory
+    try:
+        from agent_preflight.atf.risk_memory import RiskMemory
+        mem = RiskMemory()
+        mem.record("test_tool", {}, 0.5, "allow", [], "test")
+        recall = mem.recall("test_tool", {})
+        checks.append(("Risk Memory working", True, ""))
+    except Exception as e:
+        checks.append(("Risk Memory working", False, str(e)))
+
+    # Print results
+    all_pass = True
+    for name, passed, detail in checks:
+        icon = "✓" if passed else "✗"
+        color = "\033[92m" if passed else "\033[91m"
+        reset = "\033[0m"
+        line = f"  {color}{icon}{reset} {name}"
+        if detail:
+            line += f"  \033[2m{detail}\033[0m"
+        print(line)
+        if not passed:
+            all_pass = False
+
+    print()
+    if all_pass:
+        print("  All checks passed. Preflight is ready.")
+    else:
+        print("  Some checks failed. Fix the issues above.")
+    print()
 
 
 def _run_demo():
@@ -91,7 +273,6 @@ def _run_demo():
 
     pf = Preflight(cost_limit=1.00)
 
-    # Define some fake agent tools
     @pf.intercept
     def search_contacts(query):
         return [{"name": "Sarah Chen", "email": "sarah@acme.com"}]
@@ -112,7 +293,6 @@ def _run_demo():
     def generate_image(prompt, size="1024x1024"):
         print(f"  [IMG] Generated: {prompt}")
 
-    # Simulate an agent workflow
     def agent_workflow():
         search_contacts("Sarah from Acme")
         send_email(
@@ -124,14 +304,10 @@ def _run_demo():
         delete_old_records("temp_reports", before_date="2025-01-01")
         generate_image("Professional header image for Q3 report")
 
-    # Run preflight
     print("\n  Running agent in preflight mode...\n")
     plan = pf.dry_run(agent_workflow, task="Send Q3 report to Sarah at Acme")
-
-    # Display the plan
     print(pf.format(plan))
 
-    # Run policy checks
     engine = PolicyEngine()
     engine.add(Policy.deny("No DROP TABLE").when_args_match(r"DROP TABLE"))
     engine.add(Policy.budget_limit("Budget cap", max_cost=5.0))
@@ -145,7 +321,6 @@ def _run_demo():
         print("  Policy check: ALL CLEAR")
     print()
 
-    # Show dependency graph
     if plan.dependency_graph:
         print(f"  Dependency analysis:")
         print(f"    Execution order: {plan.dependency_graph.execution_order}")
@@ -153,7 +328,6 @@ def _run_demo():
         print(f"    Critical path length: {len(plan.dependency_graph.critical_path)}")
     print()
 
-    # Interactive approval
     print("  Approve this plan? [y/N] ", end="", flush=True)
     try:
         answer = input().strip().lower()
@@ -231,24 +405,27 @@ def _run_audit(args):
 def _run_enable(args):
     """Enable ATF governance for agent frameworks."""
     if "--openclaw" in args:
-        print("\n  Enabling Agent Preflight ATF for OpenClaw...\n")
-        print("  Add this to your OpenClaw agent script:\n")
+        print()
+        print("  ▲ Preflight for OpenClaw")
+        print()
+        print("  Option 1 — Zero config (recommended):")
+        print("    PREFLIGHT_AUTO=1 python my_agent.py")
+        print()
+        print("  Option 2 — One line:")
         print("    from agent_preflight.integrations.openclaw import enable_preflight")
-        print("    pf = enable_preflight()")
-        print("    safe_executor = pf.wrap_executor(your_tool_executor)")
+        print("    enable_preflight()")
         print()
-        print("  Or for async agents:")
-        print()
+        print("  Option 3 — Wrap a specific executor:")
         print("    pf = enable_preflight()")
-        print("    await pf.initialize()")
-        print("    result = await pf.intercept('tool_name', {'arg': 'val'})")
+        print("    safe_executor = pf.wrap_executor(your_executor)")
+        print()
+        print("  Option 4 — Import hook (zero code changes):")
+        print("    import agent_preflight.hook  # auto-wraps OpenClaw on import")
         print()
         print("  Modes: SAFE | BALANCED | AGGRESSIVE | ENTERPRISE")
-        print("    enable_preflight(mode=ExecutionMode.ENTERPRISE)")
         print()
     else:
         print("Usage: preflight enable --openclaw")
-        print("  Prints integration instructions for OpenClaw agents.")
         sys.exit(1)
 
 
@@ -264,9 +441,12 @@ def _run_serve(args):
         if arg == "--mode" and i + 1 < len(args):
             mode = args[i + 1]
 
-    print(f"\n  Starting ATF Gateway on port {port} (mode: {mode})...")
-    print(f"  API docs: http://localhost:{port}/docs")
-    print(f"  Health: http://localhost:{port}/health\n")
+    from .display import render_startup_banner
+    print(render_startup_banner())
+    print(f"  Gateway API starting on port {port} (mode: {mode})")
+    print(f"  Docs:   http://localhost:{port}/docs")
+    print(f"  Health: http://localhost:{port}/health")
+    print()
 
     try:
         import uvicorn
@@ -278,7 +458,7 @@ def _run_serve(args):
         uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     except ImportError:
         print("  Error: FastAPI and uvicorn required.")
-        print("  Install with: pip install agent-preflight[server]")
+        print("  Install: pip install agent-preflight[server]")
         sys.exit(1)
 
 
@@ -289,8 +469,11 @@ def _run_dashboard(args):
         if arg == "--port" and i + 1 < len(args):
             port = int(args[i + 1])
 
-    print(f"\n  Starting ATF Dashboard on port {port}...")
-    print(f"  Open: http://localhost:{port}\n")
+    from .display import render_startup_banner
+    print(render_startup_banner())
+    print(f"  Dashboard starting on port {port}")
+    print(f"  Open: http://localhost:{port}")
+    print()
 
     try:
         import uvicorn
@@ -300,12 +483,12 @@ def _run_dashboard(args):
         uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     except ImportError:
         print("  Error: FastAPI and uvicorn required.")
-        print("  Install with: pip install agent-preflight[server]")
+        print("  Install: pip install agent-preflight[server]")
         sys.exit(1)
 
 
 def _run_atf_demo(args):
-    """Run the ATF pipeline demo."""
+    """Run the ATF pipeline demo with screenshot-worthy output."""
     import asyncio
 
     async def demo():
@@ -313,98 +496,97 @@ def _run_atf_demo(args):
         from agent_preflight.atf.config import ATFConfig, ExecutionMode
         from agent_preflight.atf.models import ActionEnvelope, StructuredIntent
         from agent_preflight.atf.plugins import ALL_PLUGINS
+        from agent_preflight.display import render_interception, render_startup_banner
 
         config = ATFConfig.for_mode(ExecutionMode.SAFE, database_path=":memory:")
         gateway = ATFGateway(config)
         await gateway.initialize()
         gateway.register_plugins([p() for p in ALL_PLUGINS])
 
-        print("\n  === ATF Pipeline Demo ===\n")
+        print(render_startup_banner())
 
-        # Low-risk action
-        print("  [1] Low-risk action: read user profile")
-        envelope1 = ActionEnvelope(
-            agent_id="demo-agent",
-            tool_name="get_user_profile",
-            arguments={"user_id": "12345"},
-            intent=StructuredIntent(
-                goal="Fetch user profile data",
-                reasoning_summary="Need to display user info",
-                expected_state_changes=[],
-                irreversible=False,
-                estimated_cost=0.0,
-                confidence=0.95,
-            ),
-        )
-        r1 = await gateway.intercept_and_execute(envelope1)
-        print(f"      Verdict: {r1.verdict.value}")
-        print(f"      Risk: {r1.risk_assessment.score:.4f}")
-        print(f"      Time: {r1.total_pipeline_time_ms:.0f}ms")
-        print(f"      Summary: {r1.human_summary}")
-        if r1.passport:
-            print(f"      Passport: {r1.passport.passport_id[:16]}...")
-        print()
+        scenarios = [
+            {
+                "label": "Safe read",
+                "tool": "get_user_profile",
+                "args": {"user_id": "12345"},
+                "intent": StructuredIntent(
+                    goal="Fetch user profile data",
+                    reasoning_summary="Need to display user info",
+                    irreversible=False, confidence=0.95,
+                ),
+            },
+            {
+                "label": "Production delete",
+                "tool": "delete_database_records",
+                "args": {"query": "DELETE FROM users WHERE active=false", "database": "prod"},
+                "targets": ["/prod/database"],
+                "intent": StructuredIntent(
+                    goal="Clean up inactive users from production",
+                    reasoning_summary="Remove users inactive for 1 year",
+                    expected_state_changes=["users table row count decreases"],
+                    irreversible=True, confidence=0.6,
+                ),
+            },
+            {
+                "label": "$50K wire transfer",
+                "tool": "wire_transfer",
+                "args": {"amount": 50000, "to": "external-account", "currency": "USD"},
+                "intent": StructuredIntent(
+                    goal="Transfer funds to vendor",
+                    reasoning_summary="Quarterly payment",
+                    expected_state_changes=["balance decreases by $50,000"],
+                    external_calls=["banking-api.example.com"],
+                    irreversible=True, estimated_cost=50000, confidence=0.85,
+                ),
+            },
+        ]
 
-        # High-risk action
-        print("  [2] High-risk action: delete production database")
-        envelope2 = ActionEnvelope(
-            agent_id="demo-agent",
-            tool_name="delete_database_records",
-            arguments={"query": "DELETE FROM users WHERE active=false", "database": "prod"},
-            resource_targets=["/prod/database"],
-            intent=StructuredIntent(
-                goal="Clean up inactive users from production database",
-                reasoning_summary="Remove users who haven't logged in for 1 year",
-                expected_state_changes=["users table row count decreases"],
-                irreversible=True,
-                estimated_cost=0.0,
-                confidence=0.6,
-            ),
-        )
-        r2 = await gateway.intercept_and_execute(envelope2)
-        print(f"      Verdict: {r2.verdict.value}")
-        print(f"      Risk: {r2.risk_assessment.score:.4f}")
-        print(f"      Flags: {r2.risk_assessment.flags}")
-        print(f"      Time: {r2.total_pipeline_time_ms:.0f}ms")
-        print(f"      Summary: {r2.human_summary}")
-        if r2.correction:
-            print(f"      Correction feedback:")
-            for s in r2.correction.suggestions[:3]:
-                print(f"        - {s}")
-        print()
+        for scenario in scenarios:
+            envelope = ActionEnvelope(
+                agent_id="demo-agent",
+                tool_name=scenario["tool"],
+                arguments=scenario["args"],
+                resource_targets=scenario.get("targets", []),
+                intent=scenario["intent"],
+            )
 
-        # Financial action
-        print("  [3] Critical action: wire transfer")
-        envelope3 = ActionEnvelope(
-            agent_id="finance-bot",
-            tool_name="wire_transfer",
-            arguments={"amount": 50000, "to": "external-account", "currency": "USD"},
-            intent=StructuredIntent(
-                goal="Transfer funds to vendor",
-                reasoning_summary="Quarterly payment to cloud provider",
-                expected_state_changes=["account balance decreases by $50,000"],
-                external_calls=["banking-api.example.com"],
-                irreversible=True,
-                estimated_cost=50000,
-                confidence=0.85,
-            ),
-        )
-        r3 = await gateway.intercept_and_execute(envelope3)
-        print(f"      Verdict: {r3.verdict.value}")
-        print(f"      Risk: {r3.risk_assessment.score:.4f}")
-        print(f"      Flags: {r3.risk_assessment.flags}")
-        print(f"      Time: {r3.total_pipeline_time_ms:.0f}ms")
-        print(f"      Summary: {r3.human_summary}")
-        print()
+            result = await gateway.intercept_and_execute(envelope)
+
+            sim_data = None
+            if result.simulation_result:
+                sim_data = {
+                    "failure_probability": result.simulation_result.failure_probability,
+                    "cascade_risk": result.simulation_result.cascade_probability,
+                }
+
+            correction_data = None
+            if result.correction:
+                correction_data = result.correction.model_dump()
+
+            output = render_interception(
+                tool_name=scenario["tool"],
+                verdict=result.verdict.value,
+                risk_score=result.risk_assessment.score,
+                flags=result.risk_assessment.flags,
+                human_summary=result.human_summary,
+                correction=correction_data,
+                pipeline_time_ms=result.total_pipeline_time_ms,
+                passport_id=result.passport.passport_id if result.passport else "",
+                simulation=sim_data,
+            )
+            print(output)
 
         # Stats
         stats = await gateway.db.get_stats()
-        print("  === Pipeline Stats ===")
-        print(f"      Total actions: {stats['total_actions']}")
-        print(f"      Blocked: {stats['blocked_actions']}")
-        print(f"      Block rate: {stats['block_rate']:.0%}")
-        print(f"      Avg risk: {stats['average_risk_score']:.4f}")
-        print(f"      Avg time: {stats['average_pipeline_time_ms']:.0f}ms")
+        print(f"  Pipeline: {stats['total_actions']} evaluated, "
+              f"{stats['blocked_actions']} blocked, "
+              f"avg {stats['average_pipeline_time_ms']:.0f}ms")
+
+        # Risk Memory stats
+        mem_stats = gateway.risk_memory.get_stats()
+        print(f"  Memory:   {mem_stats['total_patterns']} patterns learned, "
+              f"{mem_stats['total_blocked']} blocks recorded")
         print()
 
     asyncio.run(demo())
@@ -413,32 +595,28 @@ def _run_atf_demo(args):
 def _run_auto(args):
     """Auto-detect and enable Preflight for all installed frameworks."""
     from .auto import enable, detect_frameworks
+    from .display import render_startup_banner
 
-    print("\n  Agent Preflight — Auto-Detection\n")
+    print(render_startup_banner())
 
-    # Show what's installed
     frameworks = detect_frameworks()
     if frameworks:
-        print(f"  Detected frameworks: {', '.join(frameworks)}")
+        print(f"  Detected: {', '.join(frameworks)}")
     else:
         print("  No supported agent frameworks detected.")
         print("  Supported: OpenClaw, LangChain, CrewAI, AutoGen, OpenAI, Anthropic")
         print()
         return
 
-    # Enable
     wrapped = enable(verbose=False)
     if wrapped:
-        print(f"  Enabled Preflight for: {', '.join(wrapped)}")
+        print(f"  Enabled:  {', '.join(wrapped)}")
     else:
         print("  No frameworks could be auto-wrapped.")
-        print("  Use manual integration instead:")
-        print()
-        print("    from agent_preflight.integrations.openclaw import enable_preflight")
-        print("    enable_preflight()")
+        print("  Use: from agent_preflight.integrations.openclaw import enable_preflight")
 
     print()
-    print("  To auto-enable on every run, set:")
+    print("  For zero-config on every run:")
     print("    export PREFLIGHT_AUTO=1")
     print()
 

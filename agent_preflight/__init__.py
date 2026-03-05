@@ -1,8 +1,22 @@
-"""Agent Preflight — Autonomous Trust Fabric for AI Agents.
+"""Agent Preflight — Stop your AI agent before it destroys something.
 
-Predictive consequence infrastructure: intercepts agent actions,
-scores risk, simulates outcomes, enforces policy, and issues
-signed Action Passports before execution.
+One line of code. Zero config. Your agent's actions are risk-scored,
+simulated, and blocked before they touch the real world.
+
+Quick Start:
+    from agent_preflight.integrations.openclaw import enable_preflight
+    enable_preflight()  # done. every tool call is now safe.
+
+Or for any framework:
+    from agent_preflight import Preflight
+    pf = Preflight()
+
+    @pf.intercept
+    def my_tool(args):
+        ...
+
+    plan = pf.dry_run(workflow, task="description")
+    print(pf.format(plan))
 """
 
 __version__ = "1.0.0"

@@ -1,174 +1,291 @@
-# agent-preflight
+# Agent Preflight
 
-**Preview what your AI agent will do before it does it.**
+**Stop your AI agent before it destroys something.**
 
-The `terraform plan` for AI agents. Open-source middleware that intercepts tool calls, classifies risk, enforces policies, and shows a human-readable execution plan before anything touches the real world.
-
-Works with **OpenAI**, **Anthropic**, **LangChain**, and any Python agent framework. Zero required dependencies.
+One line of code. Zero config. Your agent's actions are risk-scored, simulated, and blocked before they touch the real world.
 
 ```
-================================================================
-  PREFLIGHT PLAN    5 action(s)
-  Send Q3 report to Sarah at Acme
-================================================================
-
-  WARNING: 3 irreversible action(s) in plan
-  WARNING: DELETE on 'temp_reports' without prior READ - blind delete
-
-     1. search_contacts  [READ]  [REVERSIBLE]
-        query: 'Sarah from Acme'
-
-  !! 2. send_email  [WRITE]  [IRREVERSIBLE]
-        to: 'sarah@acme.com'
-        subject: 'Q3 Performance Report'
-        body: 'Hi Sarah, please find the Q3 report attached...'
-        > External communication - cannot be unsent
-
-  !  3. update_database  [WRITE]  [REVERSIBLE]
-        query: "UPDATE invoices SET status='sent' WHERE quarter=...
-
-  !! 4. delete_old_records  [DELETE]  [IRREVERSIBLE]
-        table: 'temp_reports'
-        before_date: '2025-01-01'
-        > Destructive operation
-
-  !  5. generate_image  [EXEC]  [IRREVERSIBLE]
-        prompt: 'Professional header image for Q3 report'
-        est. cost: $0.0800
-
-================================================================
-  Risk:    HIGH  (3 irreversible)
-  Cost:    $0.0800 estimated
-  Actions: 5 total
-================================================================
+pip install agent-preflight
 ```
 
-## Why
+```python
+from agent_preflight.integrations.openclaw import enable_preflight
 
-Agents take irreversible actions with zero preview:
+enable_preflight()  # done. every tool call is now safe.
+```
 
-- **$47K** burned by a recursive agent loop that ran 11 days unnoticed
+That's it. No architecture diagrams. No config files. No PhD required.
+
+---
+
+## What happens under the hood
+
+Every time your agent tries to do something — send an email, delete a record, make an API call — Preflight intercepts it and asks one question: **"Is this safe?"**
+
+```
+Your agent wants to: delete_database_records(table="users", env="prod")
+
+Preflight says:
+  Risk:     99.8%
+  Verdict:  BLOCKED
+  Flags:    [irreversible, destructive_tool, sensitive_path]
+  Why:      "Deleting production database records is irreversible.
+             Try reading first, then deleting with a WHERE clause."
+```
+
+Low-risk actions (reading files, fetching profiles) pass through **silently**. No popups. No interruptions. Your agent runs at full speed.
+
+High-risk actions (deleting data, sending money, running shell commands) get **blocked with suggestions** for safer alternatives.
+
+You only see Preflight when it matters.
+
+---
+
+## Why this exists
+
+Real incidents. Real money lost.
+
+- **$47K** burned by a recursive agent loop running 11 days unnoticed
 - **Production databases** deleted by coding agents despite freeze instructions
 - **$2.3M** in fraudulent wire transfers approved by AI assistants
 - **1,184 malicious agent skills** found on package registries
 
-Every incident had the same root cause: nobody saw what the agent was about to do.
+Every incident had the same root cause: **nobody saw what the agent was about to do.**
 
-Observability tools watch *after*. Security tools *block*. Preflight **shows you the plan**.
+Observability tools watch *after*. Security tools *block everything*. Preflight **shows you the plan and only blocks what's actually dangerous.**
 
-## Install
+---
 
-```bash
-pip install agent-preflight
+## Works with everything
+
+### OpenClaw (1 line)
+
+```python
+from agent_preflight.integrations.openclaw import enable_preflight
+enable_preflight()
+# all OpenClaw tool calls are now governed
 ```
 
-With framework integrations:
+### OpenAI function calling
 
-```bash
-pip install agent-preflight[openai]      # OpenAI function calling
-pip install agent-preflight[anthropic]   # Anthropic tool_use
-pip install agent-preflight[langchain]   # LangChain/LangGraph
-pip install agent-preflight[all]         # Everything
+```python
+from agent_preflight.integrations.openai_hook import PreflightOpenAI
+
+pf = Preflight()
+hook = PreflightOpenAI(pf)
+hook.register_tool("send_email", send_email_fn)
+hook.capture_from_response(response)
+plan = hook.build_plan(task="Send report")
 ```
 
-## Quick Start
+### Anthropic tool use
+
+```python
+from agent_preflight.integrations.anthropic_hook import PreflightAnthropic
+
+pf = Preflight()
+hook = PreflightAnthropic(pf)
+hook.register_tool("search_db", search_db_fn)
+hook.capture_from_response(response)
+plan = hook.build_plan(task="Search users")
+```
+
+### LangChain / LangGraph
+
+```python
+from agent_preflight.integrations.langchain import PreflightCallbackHandler
+
+handler = PreflightCallbackHandler(Preflight())
+agent.invoke({"input": "Organize tasks"}, config={"callbacks": [handler.handler]})
+plan = handler.build_plan(task="Organize tasks")
+```
+
+### Any Python agent
 
 ```python
 from agent_preflight import Preflight
 
 pf = Preflight()
 
-# Wrap your agent's tools
 @pf.intercept
 def send_email(to, subject, body):
     smtp.send(to, subject, body)
 
 @pf.intercept
-def update_database(query):
-    db.execute(query)
+def delete_records(table, condition):
+    db.execute(f"DELETE FROM {table} WHERE {condition}")
 
-@pf.intercept(cost=0.08)
-def generate_image(prompt):
-    return dalle.generate(prompt)
-
-# Run your agent in dry-run mode
-plan = pf.dry_run(my_agent_workflow, task="Send Q3 report")
-
-# See the full plan before anything executes
-print(pf.format(plan))
-
-# Approve and execute
+plan = pf.dry_run(my_workflow, task="Clean up old data")
+print(pf.format(plan))  # see everything before it runs
 plan.approve()
 plan.execute()
 ```
 
-## Core Features
-
-### Action Classification
-
-Automatically detects risk level, reversibility, and action type from function names and arguments.
-
-- `send_email` -> IRREVERSIBLE, HIGH risk
-- `get_users` -> READ, LOW risk
-- `DROP TABLE` in args -> CRITICAL risk
-- `DELETE FROM table;` without WHERE -> CRITICAL
-
-### Loop Detection
-
-Flags when the same tool is called 3+ times, catching runaway agent loops before they become $47K bills.
-
-### Cost Tracking
-
-Attach cost estimates to tools, set budget limits. Preflight warns when a plan exceeds your threshold.
-
-### SQL Danger Detection
-
-Catches `DROP TABLE`, `DELETE` without `WHERE`, `TRUNCATE`, and other destructive SQL patterns in arguments.
-
-### Dependency Graph
-
-Automatically tracks data flow between actions and builds a dependency graph:
+### Zero config auto-detect
 
 ```python
-plan = pf.dry_run(workflow)
-graph = plan.dependency_graph
-
-graph.execution_order    # Safe execution order (topological sort)
-graph.has_cycles         # Circular dependency detection
-graph.critical_path      # Longest sequential chain
+# Detects installed frameworks and wraps them automatically
+from agent_preflight.auto import enable
+enable()  # wraps OpenClaw, LangChain, CrewAI, AutoGen — whatever's installed
 ```
 
-Detects dangerous patterns like **DELETE without prior READ** (blind deletes).
-
-### Approve/Execute Flow
-
-Plans must be explicitly approved before execution. No accidental runs.
-
-### JSON Export
-
-`plan.to_json()` for programmatic use, CI/CD integration, and audit trails. Includes dependency graph data.
-
-### Async Support
-
-Full async support for modern agent frameworks:
-
-```python
-@pf.intercept
-async def fetch_api(url):
-    return await httpx.get(url)
-
-plan = await pf.async_dry_run(async_workflow, task="Fetch data")
-
-# Async recording context manager
-async with pf.async_recording(task="pipeline") as rec:
-    await step_one()
-    await step_two()
-print(pf.format(rec.plan))
+Or set an environment variable:
+```bash
+PREFLIGHT_AUTO=1 python my_agent.py
 ```
 
-## Policy Engine
+---
 
-Declarative rules that evaluate plans and enforce organizational policies. Think OPA (Open Policy Agent) for AI agents.
+## The full pipeline (for the technically curious)
+
+When Preflight intercepts an action, it runs through 6 stages in under 5ms for low-risk actions:
+
+```
+Agent action
+    |
+    v
+1. INTENT COMPILER -----> Validates what the agent says it's doing
+    |
+    v
+2. RISK ENGINE (<1ms) --> Weighted scoring: destructive? irreversible? financial?
+    |                      shell execution? sensitive paths? low confidence?
+    v
+3. SIMULATION ENGINE ---> Monte Carlo: 50-200 rollouts simulating failure scenarios
+    |                      "What if network is slow? Memory is low? Load is high?"
+    v
+4. DRIFT INTELLIGENCE --> "Have we seen similar actions fail before?"
+    |                      Anomaly detection against historical patterns
+    v
+5. POLICY ENGINE -------> YAML rules: "No prod deletes", "Max $500 spend"
+    |
+    v
+6. MIRROR WORLD --------> Runs action in sandbox, compares result to declared intent
+    |
+    v
+VERDICT: ALLOW / WARN / BLOCK
+    |
+    +-- If ALLOWED: Issues signed Action Passport (HMAC-SHA256, tamper-proof)
+    +-- If BLOCKED: Returns correction with safer alternatives
+```
+
+### Risk scoring
+
+Pure computation, no LLM calls. Runs in under 1ms.
+
+| Signal | Weight | Example |
+|--------|--------|---------|
+| Irreversible action | 3.0x | `send_email`, `wire_transfer` |
+| Destructive tool | 2.5x | `delete`, `drop`, `truncate`, `rm` |
+| Financial operation | 2.8x | `pay`, `transfer`, `charge`, `wire` |
+| Shell execution | 2.2x | `exec`, `bash`, `system`, `eval` |
+| Sensitive path | 2.0x | `.env`, `/etc/`, `prod`, `credentials` |
+| High cost | 1.8x | Estimated cost > $100 |
+| Low confidence | 1.5x | Agent confidence < 50% |
+| Drift similarity | 2.0x | Similar to past failures |
+
+Score = sigmoid(weighted_sum + bias) -> 0.0 to 1.0
+
+### Monte Carlo simulation
+
+Runs 50-200 simulated scenarios with random perturbations:
+- Filesystem cascades (deleting a file that other files depend on)
+- API cost explosions (retry loops that multiply costs)
+- Dependency breaks (removing packages other services need)
+- Memory runaway (operations that eat all available RAM)
+- Infrastructure mutations (changing configs that affect other services)
+
+Returns failure probability, cascade risk, and volatility index.
+
+### Action Passports
+
+Every allowed action gets a signed, tamper-proof audit artifact:
+
+```json
+{
+  "passport_id": "a1b2c3d4...",
+  "agent_id": "my-agent",
+  "tool_name": "update_database",
+  "risk_score": 0.12,
+  "verdict": "allow",
+  "signature": "hmac-sha256:e4f5a6b7..."
+}
+```
+
+Verifiable. Auditable. Compliance-ready.
+
+---
+
+## Smart interruptions
+
+Preflight doesn't ask "are you sure?" for everything. That's annoying and useless.
+
+| Risk level | What happens | Example |
+|-----------|-------------|---------|
+| **Low** (0-30%) | Passes silently | `get_user()`, `read_file()`, `search()` |
+| **Medium** (30-60%) | Warning + allows | `update_database()`, `send_notification()` |
+| **High** (60-80%) | Blocks + suggests alternative | `delete_records()`, `exec_shell()` |
+| **Critical** (80%+) | Hard block + correction | `drop_table()`, `wire_transfer()` |
+
+If the **user** explicitly asked the agent to do something, Preflight gives it more trust. If the **agent** decided to do it autonomously, Preflight is more cautious.
+
+---
+
+## CLI
+
+```bash
+preflight demo                    # interactive demo
+preflight atf                     # full ATF pipeline demo
+preflight serve --port 8100       # start REST API server
+preflight dashboard --port 8200   # start monitoring dashboard
+preflight check script.py         # analyze a script's agent actions
+preflight audit ./trail           # view audit history
+preflight enable --openclaw       # show OpenClaw integration guide
+preflight auto                    # auto-detect and enable for all frameworks
+preflight version                 # show version
+```
+
+### REST API
+
+```bash
+# Start the server
+preflight serve --port 8100
+
+# Evaluate an action
+curl -X POST http://localhost:8100/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "my-agent",
+    "tool_name": "delete_records",
+    "arguments": {"table": "users"},
+    "intent": {
+      "goal": "Clean up inactive users",
+      "reasoning_summary": "Monthly cleanup",
+      "irreversible": true,
+      "confidence": 0.6
+    }
+  }'
+
+# View passports
+curl http://localhost:8100/passports
+
+# Pipeline stats
+curl http://localhost:8100/stats
+```
+
+### Dashboard
+
+```bash
+preflight dashboard --port 8200
+# Open http://localhost:8200
+```
+
+Real-time monitoring with action timeline, risk charts, passport logs, and policy violations.
+
+---
+
+## Policy engine
+
+Define rules in Python or YAML. Think OPA (Open Policy Agent) for AI agents.
 
 ```python
 from agent_preflight import PolicyEngine, Policy, RiskLevel, ActionType
@@ -179,330 +296,167 @@ engine = PolicyEngine()
 engine.add(Policy.deny("No DROP TABLE").when_args_match(r"DROP TABLE"))
 engine.add(Policy.deny("No critical risk").when(risk_level=RiskLevel.CRITICAL))
 
-# Require human review for destructive actions
+# Require human review
 engine.add(Policy.require_approval("Review deletes").when(action_type=ActionType.DELETE))
 
 # Budget enforcement
-engine.add(Policy.budget_limit("Stay under $50", max_cost=50.0))
+engine.add(Policy.budget_limit("Max $50", max_cost=50.0))
 
-# Action count limits (prevent infinite loops)
+# Prevent infinite loops
 engine.add(Policy.max_actions("Too many actions", limit=20))
-
-# Block all irreversible actions in staging
-engine.add(Policy.no_irreversible("Staging is read-only"))
 
 # Custom rules
 engine.add(
     Policy.deny("No external emails")
     .when_custom(lambda a: a.name == "send_email" and "gmail" in str(a.args))
-    .reason("Only internal emails allowed")
 )
 
-# Evaluate
 result = engine.evaluate(plan)
-
 if result.blocked:
-    print(result.summary())    # Human-readable denial report
-    sys.exit(1)
-
-if result.needs_approval:
-    # Route to human reviewer
-    send_for_review(plan, result)
-
-# Programmatic access
-result.to_dict()  # For CI/CD integration
+    print(result.summary())
 ```
 
-### Policy Types
+---
 
-| Method | Verdict | Use Case |
-|--------|---------|----------|
-| `Policy.deny(name)` | DENY | Block execution entirely |
-| `Policy.require_approval(name)` | REQUIRE_APPROVAL | Flag for human review |
-| `Policy.warn(name)` | WARN | Log warning but allow |
-| `Policy.budget_limit(name, max_cost)` | DENY | Cost threshold |
-| `Policy.max_actions(name, limit)` | DENY | Action count limit |
-| `Policy.no_irreversible(name)` | DENY | Block irreversible actions |
+## Audit trail
 
-### Conditions
-
-```python
-.when(risk_level=RiskLevel.CRITICAL)  # Match by attribute
-.when(action_type=ActionType.DELETE)   # Match action type
-.when(name=r"send_.*")                 # Regex match on name
-.when_args_match(r"DROP TABLE")        # Regex match on arguments
-.when_custom(lambda a: ...)            # Custom predicate
-.reason("Explain why")                 # Custom denial message
-```
-
-## Audit Trail
-
-Persist every plan evaluation for compliance, debugging, and analytics.
+Every action. Every decision. Every passport. Queryable.
 
 ```python
 from agent_preflight import AuditLog
 
-# JSON file storage (one file per entry)
-audit = AuditLog("./audit_trail")
-
-# Or SQLite for production (indexed, queryable)
 audit = AuditLog("./preflight.db", backend="sqlite")
 
-# Record a plan evaluation
-audit.record(
-    plan,
-    verdict="approved",
-    actor="deploy-bot@acme.com",
-    policy_result=result.to_dict(),
-    metadata={"environment": "production", "run_id": "abc123"},
-)
+# Record
+audit.record(plan, verdict="approved", actor="deploy-bot@acme.com")
 
-# Query history
+# Query
 recent = audit.query(last_n=10)
 critical = audit.query(risk_level=RiskLevel.CRITICAL)
-by_actor = audit.query(actor="john@acme.com")
 denied = audit.query(verdict="denied")
-last_hour = audit.query(since=time.time() - 3600)
 ```
 
-View from CLI:
+---
 
-```bash
-preflight audit ./preflight.db
-```
+## LLM-powered semantic analysis
 
-## LLM-Powered Semantic Analysis
-
-Go beyond heuristic pattern matching. Use an LLM to reason about the *meaning* of agent actions and their potential consequences.
+Go beyond pattern matching. Use an LLM to reason about what your agent is actually doing.
 
 ```python
 from agent_preflight import SemanticAnalyzer
 
-# With OpenAI
 analyzer = SemanticAnalyzer(provider="openai", model="gpt-4")
-
-# With Anthropic
-analyzer = SemanticAnalyzer(provider="anthropic", model="claude-sonnet-4-20250514")
-
-# Or bring your own LLM function
-analyzer = SemanticAnalyzer(llm_fn=my_custom_llm)
-
 analysis = analyzer.analyze(plan)
-print(analysis.summary)              # Overall risk assessment
-print(analysis.concerns)             # Specific safety concerns
-print(analysis.recommendations)      # Suggestions to reduce risk
-print(analysis.recommended_risk)     # LLM's risk classification
-print(analysis.chain_analysis)       # How actions interact
 
-# Add context about your environment
-analysis = analyzer.analyze_with_context(
-    plan,
-    context="This runs against a production database with 10M users"
-)
+print(analysis.summary)           # Overall risk assessment
+print(analysis.concerns)          # Specific safety concerns
+print(analysis.recommendations)   # How to reduce risk
 ```
 
-## Framework Integrations
+---
 
-### OpenAI Function Calling
-
-```python
-from openai import OpenAI
-from agent_preflight import Preflight
-from agent_preflight.integrations.openai_hook import PreflightOpenAI
-
-pf = Preflight()
-hook = PreflightOpenAI(pf)
-
-# Register tool executors
-hook.register_tool("search_web", search_web_fn)
-hook.register_tool("send_email", send_email_fn)
-
-# Make your OpenAI call as normal
-client = OpenAI()
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[...],
-    tools=[...],
-)
-
-# Capture tool calls from the response
-hook.capture_from_response(response)
-
-# Build and review the plan
-plan = hook.build_plan(task="User request")
-print(pf.format(plan))
-
-# Execute only if safe
-plan.approve()
-plan.execute()
-```
-
-### Anthropic Tool Use
-
-```python
-import anthropic
-from agent_preflight import Preflight
-from agent_preflight.integrations.anthropic_hook import PreflightAnthropic
-
-pf = Preflight()
-hook = PreflightAnthropic(pf)
-
-# Register tool executors
-hook.register_tool("search_db", search_db_fn)
-
-# Make your Anthropic call
-client = anthropic.Anthropic()
-response = client.messages.create(
-    model="claude-sonnet-4-20250514",
-    messages=[...],
-    tools=[...],
-)
-
-# Capture tool_use blocks
-hook.capture_from_response(response)
-
-plan = hook.build_plan(task="Claude task")
-print(pf.format(plan))
-```
-
-### LangChain / LangGraph
-
-```python
-from agent_preflight import Preflight
-from agent_preflight.integrations.langchain import PreflightCallbackHandler
-
-pf = Preflight()
-handler = PreflightCallbackHandler(pf)
-
-# Use with any LangChain agent
-agent.invoke(
-    {"input": "Organize my tasks"},
-    config={"callbacks": [handler.handler]},
-)
-
-plan = handler.build_plan(task="Organize tasks")
-print(pf.format(plan))
-```
-
-## How It Works
-
-```
-Your Agent Code          Preflight Engine           Human Review
-+--------------+    +----------------------+    +--------------+
-|  @intercept  |--->|  1. Capture calls    |    |              |
-|  tool calls  |    |  2. Classify risk    |    |  Review plan |
-|              |    |  3. Build dep graph  |--->|  Run policies|
-|  dry_run()   |    |  4. Render plan      |    |  Approve/Deny|
-|              |    |  5. Check policies   |    |              |
-+--------------+    |  6. Audit trail      |    +------+-------+
-                    +----------------------+           |
-                                                       v
-                                              +--------------+
-                                              |   Execute    |
-                                              | (if approved)|
-                                              +--------------+
-```
-
-1. **Intercept** - `@pf.intercept` wraps your tool functions
-2. **Dry Run** - `pf.dry_run()` executes your agent logic but captures calls instead of running them
-3. **Classify** - Each captured action is analyzed for risk, reversibility, and type
-4. **Dependency Graph** - Data flow between actions is tracked, blind deletes flagged
-5. **Render** - Human-readable plan with color-coded risk levels
-6. **Policy Check** - Organizational rules evaluated against the plan
-7. **Audit** - Plan recorded for compliance and debugging
-8. **Approve** - Explicit approval gate before any real execution
-9. **Execute** - Replays captured calls against real functions
-
-Zero required dependencies. Works with any Python agent framework.
-
-## CLI
+## Install
 
 ```bash
-preflight demo              # Interactive demo with policy checks
-preflight check script.py   # Analyze a script's agent actions
-preflight audit ./trail     # View audit history
-preflight version           # Show version
+pip install agent-preflight                # core (zero dependencies except pydantic)
+pip install agent-preflight[openai]        # + OpenAI integration
+pip install agent-preflight[anthropic]     # + Anthropic integration
+pip install agent-preflight[langchain]     # + LangChain integration
+pip install agent-preflight[server]        # + FastAPI server & dashboard
+pip install agent-preflight[all]           # everything
 ```
 
-## API Reference
+Python 3.10+. Zero required dependencies beyond pydantic.
 
-### `Preflight(auto_classify=True, max_actions=100, cost_limit=None)`
-
-Create a preflight engine.
-
-### `@pf.intercept` / `@pf.intercept(cost=0.05, reversible=False)`
-
-Decorator to register a tool for interception. Works with sync and async functions.
-
-### `pf.dry_run(run_fn, task="")` / `await pf.async_dry_run(run_fn, task="")`
-
-Execute in dry-run mode. All intercepted calls are captured, not executed. Returns a `Plan`.
-
-### `Plan`
-
-- `plan.actions` - List of captured `ActionCapture` objects
-- `plan.overall_risk` - Highest risk level across all actions
-- `plan.irreversible_count` - Number of irreversible actions
-- `plan.warnings` - Auto-generated warnings
-- `plan.dependency_graph` - `DependencyGraph` with execution order and cycle detection
-- `plan.approve()` - Mark plan as approved
-- `plan.execute()` / `await plan.async_execute()` - Execute all actions
-- `plan.to_json()` / `plan.to_dict()` - Export
-
-### `PolicyEngine`
-
-- `engine.add(policy)` - Add a policy rule
-- `engine.evaluate(plan)` - Returns `PolicyResult`
-
-### `AuditLog(path, backend="json"|"sqlite")`
-
-- `audit.record(plan, verdict, actor, ...)` - Persist a plan evaluation
-- `audit.query(last_n, risk_level, actor, ...)` - Search history
-
-### `SemanticAnalyzer(provider, model, llm_fn)`
-
-- `analyzer.analyze(plan)` - LLM-powered risk analysis
-- `analyzer.analyze_with_context(plan, context)` - Analysis with system context
-
-### Custom Classifiers
-
-```python
-def my_classifier(action):
-    if "prod" in str(action.args):
-        action.risk_level = RiskLevel.CRITICAL
-        action.risk_reasons.append("Production environment detected")
-    return action
-
-pf.add_classifier(my_classifier)
-```
+---
 
 ## Architecture
 
 ```
 agent_preflight/
-├── __init__.py              # Public API
-├── core.py                  # Preflight engine (sync + async)
-├── models.py                # ActionCapture, Plan, DependencyGraph
-├── classifiers.py           # Heuristic risk classifiers
-├── renderer.py              # Terraform-style terminal output
-├── policy.py                # Policy engine with rule DSL
-├── audit.py                 # Audit trail (JSON + SQLite)
-├── semantic.py              # LLM-powered semantic analysis
-├── cli.py                   # CLI entry point
-└── integrations/
-    ├── openai_hook.py       # OpenAI function calling
-    ├── anthropic_hook.py    # Anthropic tool_use
-    └── langchain.py         # LangChain callback handler
+├── core.py                 # Preflight engine (sync + async)
+├── models.py               # ActionCapture, Plan, DependencyGraph
+├── classifiers.py          # Heuristic risk classifiers
+├── renderer.py             # Terraform-style terminal output
+├── policy.py               # Policy engine with rule DSL
+├── audit.py                # Audit trail (JSON + SQLite)
+├── semantic.py             # LLM-powered semantic analysis
+├── auto.py                 # Universal auto-detect for all frameworks
+├── cli.py                  # CLI entry point
+├── atf/                    # Autonomous Trust Fabric
+│   ├── gateway.py          # Central orchestrator
+│   ├── risk_engine.py      # Fast risk scoring (<1ms)
+│   ├── intent_compiler.py  # Intent validation & embedding
+│   ├── simulation.py       # Monte Carlo engine
+│   ├── drift.py            # Anomaly detection
+│   ├── mirror_world.py     # Sandbox execution
+│   ├── passport.py         # HMAC-signed audit artifacts
+│   ├── feedback.py         # Correction suggestions
+│   ├── policy_v2.py        # YAML-based policy engine
+│   ├── database.py         # SQLite persistence
+│   └── plugins/            # Simulation domain plugins
+│       ├── filesystem.py   # Filesystem cascade detection
+│       ├── api_cost.py     # API cost explosion
+│       ├── dependency.py   # Dependency graph analysis
+│       ├── memory.py       # Memory runaway detection
+│       └── infrastructure.py  # Infrastructure mutation
+├── integrations/
+│   ├── openclaw.py         # OpenClaw (zero-config)
+│   ├── openai_hook.py      # OpenAI function calling
+│   ├── anthropic_hook.py   # Anthropic tool_use
+│   └── langchain.py        # LangChain callback
+├── federation/             # Cross-org risk sharing (experimental)
+└── dashboard/              # Real-time monitoring UI
 ```
+
+---
+
+## API reference
+
+### `Preflight(auto_classify=True, max_actions=100, cost_limit=None)`
+
+Core engine. Intercepts, classifies, and plans.
+
+### `@pf.intercept` / `@pf.intercept(cost=0.05, reversible=False)`
+
+Decorator to register tools for interception.
+
+### `pf.dry_run(run_fn, task="")` / `await pf.async_dry_run(run_fn, task="")`
+
+Capture all tool calls without executing them. Returns a `Plan`.
+
+### `Plan`
+
+- `.actions` — List of captured actions
+- `.overall_risk` — Highest risk level
+- `.irreversible_count` — Number of irreversible actions
+- `.warnings` — Auto-generated warnings
+- `.dependency_graph` — Execution order, cycles, critical path
+- `.approve()` / `.execute()` — Gate and run
+- `.to_json()` — Export for CI/CD
+
+### `enable_preflight(mode="safe")`
+
+One-line OpenClaw integration. Returns `OpenClawPreflight` instance.
+
+### `ATFGateway`
+
+Full pipeline orchestrator with risk engine, simulation, drift detection, policy enforcement, mirror world, and passport issuance.
+
+---
 
 ## Roadmap
 
 - [ ] MCP (Model Context Protocol) tool wrapper
-- [ ] Drift detection (compare plans over time)
 - [ ] GitHub Action for CI/CD gating
-- [ ] Web dashboard for team review
 - [ ] Webhook notifications (Slack, Teams)
 - [ ] Multi-agent fleet management
+- [ ] Federation network for cross-org risk sharing
+- [ ] CrewAI native integration
+- [ ] AutoGen native integration
+- [ ] VS Code extension
+
+---
 
 ## License
 

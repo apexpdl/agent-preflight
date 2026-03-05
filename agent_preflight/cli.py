@@ -46,6 +46,10 @@ def main():
         _run_atf_demo(args[1:])
         return
 
+    if args[0] == "auto":
+        _run_auto(args[1:])
+        return
+
     print(f"Unknown command: {args[0]}")
     print(_help_text())
     sys.exit(1)
@@ -53,30 +57,27 @@ def main():
 
 def _help_text():
     return """
-agent-preflight - Autonomous Trust Fabric for AI Agents
+agent-preflight - Stop your AI agent before it destroys something.
 
 Usage:
-    preflight demo             Run interactive demo with policy checks
-    preflight check <script>   Analyze a Python script's agent actions
-    preflight audit [path]     View audit trail
-    preflight enable --openclaw  Enable ATF governance for OpenClaw
+    preflight demo               Interactive demo with policy checks
+    preflight atf                Full ATF pipeline demo
+    preflight auto               Auto-detect and enable for all frameworks
     preflight serve [--port N]   Start the ATF Gateway API server
     preflight dashboard [--port N]  Start the monitoring dashboard
-    preflight atf              Run ATF pipeline demo
-    preflight version          Show version
-    preflight help             Show this help
+    preflight check <script>     Analyze a Python script's agent actions
+    preflight audit [path]       View audit trail
+    preflight enable --openclaw  Enable ATF governance for OpenClaw
+    preflight version            Show version
+    preflight help               Show this help
 
-ATF Gateway API:
-    from agent_preflight.atf.gateway import ATFGateway, create_fastapi_app
-
-    gateway = ATFGateway()
-    await gateway.initialize()
-    result = await gateway.intercept_and_execute(envelope)
-
-OpenClaw Integration:
+Quick Start (OpenClaw):
     from agent_preflight.integrations.openclaw import enable_preflight
-    pf = enable_preflight()
-    safe_executor = pf.wrap_executor(original_executor)
+    enable_preflight()  # done. every tool call is now safe.
+
+Quick Start (Any Framework):
+    from agent_preflight.auto import enable
+    enable()  # auto-detects and wraps installed frameworks
 
 Modes: SAFE (default) | BALANCED | AGGRESSIVE | ENTERPRISE
 """
@@ -407,6 +408,39 @@ def _run_atf_demo(args):
         print()
 
     asyncio.run(demo())
+
+
+def _run_auto(args):
+    """Auto-detect and enable Preflight for all installed frameworks."""
+    from .auto import enable, detect_frameworks
+
+    print("\n  Agent Preflight — Auto-Detection\n")
+
+    # Show what's installed
+    frameworks = detect_frameworks()
+    if frameworks:
+        print(f"  Detected frameworks: {', '.join(frameworks)}")
+    else:
+        print("  No supported agent frameworks detected.")
+        print("  Supported: OpenClaw, LangChain, CrewAI, AutoGen, OpenAI, Anthropic")
+        print()
+        return
+
+    # Enable
+    wrapped = enable(verbose=False)
+    if wrapped:
+        print(f"  Enabled Preflight for: {', '.join(wrapped)}")
+    else:
+        print("  No frameworks could be auto-wrapped.")
+        print("  Use manual integration instead:")
+        print()
+        print("    from agent_preflight.integrations.openclaw import enable_preflight")
+        print("    enable_preflight()")
+
+    print()
+    print("  To auto-enable on every run, set:")
+    print("    export PREFLIGHT_AUTO=1")
+    print()
 
 
 if __name__ == "__main__":

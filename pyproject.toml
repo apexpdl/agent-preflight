@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-preflight"
-version = "1.0.0"
-description = "Autonomous Trust Fabric — Predictive consequence infrastructure for AI agents. Universal pre-execution governance with risk scoring, sandbox simulation, drift intelligence, and signed action passports."
+version = "1.1.0"
+description = "OpenAura — The AI safety and execution ecosystem. Agent Preflight for real-time risk scoring and simulation. TrustKernel for cryptographically verifiable, deterministic AI execution."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -16,7 +16,9 @@ keywords = [
     "ai", "agents", "safety", "preflight", "governance", "trust",
     "simulation", "risk", "audit", "passport", "drift", "sandbox",
     "langchain", "openai", "anthropic", "openclaw", "mcp", "policy",
-    "compliance", "enterprise", "protocol",
+    "compliance", "enterprise", "protocol", "trustkernel", "cryptography",
+    "deterministic", "execution", "rollback", "ledger", "consensus",
+    "crewai", "autogen", "openaura",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -58,6 +60,10 @@ Issues = "https://github.com/apexpdl/agent-preflight/issues"
 
 [project.scripts]
 preflight = "agent_preflight.cli:main"
+aura = "agent_preflight.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["agent_preflight*"]
+include = ["agent_preflight*", "trust_kernel*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

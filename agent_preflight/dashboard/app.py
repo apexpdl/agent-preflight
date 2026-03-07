@@ -52,7 +52,7 @@ def create_dashboard_app(config: Optional[ATFConfig] = None):
         recent_logs = await db.get_pipeline_logs(limit=20)
         passports = await db.get_passports(limit=10)
 
-        # Build timeline rows
+        # Build timeline rows (table + visual flow)
         timeline_html = ""
         for log in recent_logs:
             verdict_class = {
@@ -62,20 +62,33 @@ def create_dashboard_app(config: Optional[ATFConfig] = None):
                 "require_approval": "verdict-warn",
             }.get(log["verdict"], "")
             risk_bar_width = int(log["risk_score"] * 100)
+
+            # Visual flow: Agent -> Tool -> Risk -> Verdict
+            verdict_icon = {"allow": "&#10003;", "warn": "&#9888;", "block": "&#9940;",
+                           "require_approval": "&#128274;"}.get(log["verdict"], "?")
+            dot_class = {"allow": "dot-green", "warn": "dot-yellow",
+                        "block": "dot-red", "require_approval": "dot-yellow"}.get(log["verdict"], "")
+
             timeline_html += f"""
-            <tr class="{verdict_class}">
-                <td>{log['created_at']}</td>
-                <td><code>{log['agent_id']}</code></td>
-                <td><code>{log['tool_name']}</code></td>
-                <td>
-                    <div class="risk-bar">
-                        <div class="risk-fill" style="width:{risk_bar_width}%"></div>
-                        <span>{log['risk_score']:.2f}</span>
+            <div class="timeline-entry {verdict_class}">
+                <div class="timeline-dot {dot_class}"></div>
+                <div class="timeline-content">
+                    <div class="timeline-header">
+                        <span class="timeline-agent">{log['agent_id']}</span>
+                        <span class="timeline-time">{log['created_at']}</span>
                     </div>
-                </td>
-                <td><span class="verdict-badge {verdict_class}">{log['verdict'].upper()}</span></td>
-                <td>{log.get('pipeline_time_ms', 0):.0f}ms</td>
-            </tr>"""
+                    <div class="timeline-flow">
+                        <span class="flow-step">Agent</span>
+                        <span class="flow-arrow">&rarr;</span>
+                        <span class="flow-step flow-tool">{log['tool_name']}</span>
+                        <span class="flow-arrow">&rarr;</span>
+                        <span class="flow-step flow-risk">Risk {log['risk_score']:.2f}</span>
+                        <span class="flow-arrow">&rarr;</span>
+                        <span class="flow-step flow-verdict {verdict_class}">{verdict_icon} {log['verdict'].upper()}</span>
+                    </div>
+                    <div class="timeline-meta">{log.get('pipeline_time_ms', 0):.0f}ms pipeline</div>
+                </div>
+            </div>"""
 
         # Build passport rows
         passport_html = ""
@@ -177,6 +190,18 @@ def _render_index(stats: dict, timeline_html: str, passport_html: str) -> str:
                 {timeline_html if timeline_html else '<tr><td colspan="6" class="empty">No actions recorded yet</td></tr>'}
             </tbody>
         </table>
+    </section>
+
+    <section class="panel">
+        <h2>Visual Agent Timeline</h2>
+        <div class="agent-timeline">
+            {timeline_html if timeline_html else '<p class="empty">No actions recorded yet</p>'}
+        </div>
+        <p class="timeline-legend">
+            <span class="legend-item"><span class="dot dot-green"></span> Allowed</span>
+            <span class="legend-item"><span class="dot dot-yellow"></span> Warning</span>
+            <span class="legend-item"><span class="dot dot-red"></span> Blocked</span>
+        </p>
     </section>
 
     <section class="panel">

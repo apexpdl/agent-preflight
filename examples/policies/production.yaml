@@ -1,0 +1,69 @@
+# Agent Preflight — Production Policy
+# Copy this file and customize for your environment.
+#
+# Usage:
+#   from agent_preflight.atf.config import ATFConfig
+#   config = ATFConfig(policy_file="policies/production.yaml")
+#
+# Or via CLI:
+#   preflight serve --policy policies/production.yaml
+
+rules:
+  # --- Critical: Block dangerous operations ---
+  - name: no-production-deletes
+    condition: 'tool matches "delete|drop|truncate|remove" AND path startswith "/prod"'
+    action: block
+    severity: critical
+
+  - name: no-system-paths
+    condition: 'args_match "(/etc/|/root/|/usr/|/sys/|/var/|\.ssh|\.gnupg)"'
+    action: block
+    severity: critical
+
+  - name: no-drop-table
+    condition: 'args_match "DROP\s+(TABLE|DATABASE)"'
+    action: block
+    severity: critical
+
+  - name: no-rm-rf
+    condition: 'args_match "rm\s+-rf"'
+    action: block
+    severity: critical
+
+  # --- High: Require approval ---
+  - name: high-cost-operations
+    condition: 'estimated_cost > 1000'
+    action: require_approval
+    severity: high
+
+  - name: irreversible-actions
+    condition: 'irreversible == true'
+    action: require_approval
+    severity: high
+
+  - name: financial-transfers
+    condition: 'tool matches "transfer|wire|payment|charge"'
+    action: require_approval
+    severity: high
+
+  # --- Medium: Warn on risky patterns ---
+  - name: mass-operations
+    condition: 'tool matches "bulk|batch|mass|all|every"'
+    action: warn
+    severity: medium
+
+  - name: shell-execution
+    condition: 'tool matches "exec|shell|bash|system|subprocess"'
+    action: warn
+    severity: medium
+
+  - name: low-confidence
+    condition: 'confidence < 0.4'
+    action: warn
+    severity: medium
+
+  # --- Operational: Off-hours protection ---
+  - name: after-hours-block
+    condition: 'time outside 6-22 AND irreversible == true'
+    action: block
+    severity: high

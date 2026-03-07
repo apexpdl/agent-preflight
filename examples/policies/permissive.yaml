@@ -1,0 +1,28 @@
+# Agent Preflight — Permissive Policy (Development / Testing)
+# Minimal restrictions. Only blocks truly catastrophic actions.
+
+rules:
+  - name: no-rm-rf-root
+    condition: 'args_match "rm\s+-rf\s+/"'
+    action: block
+    severity: critical
+
+  - name: no-drop-database
+    condition: 'args_match "DROP\s+DATABASE"'
+    action: block
+    severity: critical
+
+  - name: no-format-disk
+    condition: 'tool matches "format|fdisk|mkfs"'
+    action: block
+    severity: critical
+
+  - name: warn-destructive
+    condition: 'tool matches "delete|drop|truncate|remove"'
+    action: warn
+    severity: medium
+
+  - name: warn-high-cost
+    condition: 'estimated_cost > 5000'
+    action: warn
+    severity: medium

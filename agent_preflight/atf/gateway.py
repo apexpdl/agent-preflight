@@ -12,11 +12,13 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Optional
 
+from agent_preflight.atf.analytics import AgentAnalytics
 from agent_preflight.atf.config import ATFConfig
 from agent_preflight.atf.database import ATFDatabase
 from agent_preflight.atf.drift import DriftIntelligenceEngine
 from agent_preflight.atf.feedback import FeedbackGenerator
 from agent_preflight.atf.intent_compiler import IntentCompiler
+from agent_preflight.atf.memory_safety import MemorySafetyScanner
 from agent_preflight.atf.mirror_world import MirrorWorld
 from agent_preflight.atf.models import (
     ActionEnvelope,
@@ -25,6 +27,7 @@ from agent_preflight.atf.models import (
 )
 from agent_preflight.atf.passport import PassportAuthority
 from agent_preflight.atf.policy_v2 import YAMLPolicyEngine
+from agent_preflight.atf.prompt_injection import PromptInjectionDetector
 from agent_preflight.atf.risk_engine import RiskEngine
 from agent_preflight.atf.risk_memory import RiskMemory
 from agent_preflight.atf.simulation import SimulationEngine
@@ -55,6 +58,9 @@ class ATFGateway:
         self.drift_engine: Optional[DriftIntelligenceEngine] = None
         self.feedback_generator = FeedbackGenerator()
         self.risk_memory = RiskMemory()
+        self.injection_detector = PromptInjectionDetector()
+        self.memory_scanner = MemorySafetyScanner()
+        self.analytics = AgentAnalytics()
         self._tool_registry: dict[str, Callable] = {}
         self._initialized = False
 
@@ -103,6 +109,42 @@ class ATFGateway:
             await self.initialize()
 
         start = time.perf_counter()
+
+        # 0. Prompt injection scan on arguments
+        injection = self.injection_detector.scan_arguments(envelope.arguments)
+        if injection.is_injection:
+            from agent_preflight.atf.models import RiskAssessment, PolicyDecision, CorrectionFeedback
+            risk = RiskAssessment(
+                score=1.0,
+                flags=["prompt_injection_detected", injection.highest_threat],
+                requires_mirror=False,
+                breakdown={"prompt_injection": 1.0},
+                computation_time_ms=0,
+            )
+            elapsed = (time.perf_counter() - start) * 1000
+            correction = CorrectionFeedback(
+                declared_goal=envelope.intent.goal,
+                actual_result="Prompt injection detected in arguments",
+                violations=[f"Injection type: {injection.highest_threat}"],
+                suggestions=["Remove injected instructions from input", "Sanitize text sources"],
+            )
+            result = PipelineResult(
+                action_id=envelope.action_id,
+                verdict=Verdict.BLOCK,
+                risk_assessment=risk,
+                policy_decision=PolicyDecision(allow=False, violations=[]),
+                correction=correction,
+                human_summary=f"Blocked: prompt injection detected ({injection.highest_threat})",
+                total_pipeline_time_ms=round(elapsed, 3),
+            )
+            self.analytics.record(
+                agent_id=envelope.agent_id,
+                tool_name=envelope.tool_name,
+                risk_score=1.0,
+                verdict="block",
+                flags=risk.flags,
+            )
+            return result
 
         # 1. Compile intent
         compiled = await self.intent_compiler.compile(envelope)
@@ -196,6 +238,16 @@ class ATFGateway:
             verdict=verdict.value,
             flags=risk.flags,
             agent_id=envelope.agent_id,
+        )
+
+        # 12b. Record agent analytics
+        self.analytics.record(
+            agent_id=envelope.agent_id,
+            tool_name=envelope.tool_name,
+            risk_score=risk.score,
+            verdict=verdict.value,
+            flags=risk.flags,
+            arguments=envelope.arguments,
         )
 
         # 13. Record drift outcome
@@ -341,6 +393,19 @@ def create_fastapi_app(config: Optional[ATFConfig] = None):
         """Get pipeline statistics."""
         stats = await gateway.db.get_stats()
         return stats
+
+    @app.get("/analytics")
+    async def get_analytics():
+        """Get agent behavior analytics."""
+        return gateway.analytics.get_summary()
+
+    @app.get("/analytics/{agent_id}")
+    async def get_agent_analytics(agent_id: str):
+        """Get analytics for a specific agent."""
+        profile = gateway.analytics.get_profile(agent_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+        return profile.to_dict()
 
     @app.get("/health")
     async def health():

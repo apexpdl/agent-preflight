@@ -1,0 +1,48 @@
+# Agent Preflight — Strict Policy (Enterprise / Regulated Environments)
+# Maximum safety. All risky actions require explicit approval.
+
+rules:
+  - name: no-destructive-tools
+    condition: 'tool matches "delete|drop|truncate|remove|purge|destroy|kill|wipe|erase"'
+    action: block
+    severity: critical
+
+  - name: no-shell-execution
+    condition: 'tool matches "exec|shell|bash|system|subprocess|eval|run_command"'
+    action: block
+    severity: critical
+
+  - name: no-financial-auto
+    condition: 'tool matches "pay|transfer|charge|invoice|refund|purchase|wire|withdraw"'
+    action: block
+    severity: critical
+
+  - name: no-mass-operations
+    condition: 'tool matches "bulk|batch|mass|all|every|flush|reset|migrate"'
+    action: block
+    severity: high
+
+  - name: approve-all-writes
+    condition: 'tool matches "write|create|update|modify|save|overwrite"'
+    action: require_approval
+    severity: medium
+
+  - name: approve-network
+    condition: 'tool matches "send|email|slack|webhook|notify|post|publish"'
+    action: require_approval
+    severity: medium
+
+  - name: any-cost
+    condition: 'estimated_cost > 0'
+    action: require_approval
+    severity: medium
+
+  - name: low-confidence-block
+    condition: 'confidence < 0.6'
+    action: block
+    severity: high
+
+  - name: irreversible-block
+    condition: 'irreversible == true'
+    action: block
+    severity: critical

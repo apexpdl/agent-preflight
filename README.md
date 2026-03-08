@@ -1,8 +1,8 @@
-# Agent Preflight
+# Preflight
 
-**Stop your AI agent before it destroys something.**
+**The execution firewall for AI agents.**
 
-One line of code. Zero config. Your agent's actions are risk-scored, simulated, and blocked before they touch the real world.
+One line of code. Zero config. Every AI agent action is risk-scored, simulated, and verified before it touches the real world.
 
 ```
 pip install agent-preflight
@@ -14,13 +14,28 @@ from agent_preflight.integrations.openclaw import enable_preflight
 enable_preflight()  # done. every tool call is now safe.
 ```
 
-That's it. No architecture diagrams. No config files. No PhD required.
+No architecture diagrams. No config files. No PhD required.
 
 ---
 
-## What happens under the hood
+## The Problem
 
-Every time your agent tries to do something — send an email, delete a record, make an API call — Preflight intercepts it and asks one question: **"Is this safe?"**
+Real incidents. Real money lost. Real damage done.
+
+- **$47K** burned by a recursive agent loop running 11 days unnoticed
+- **Production databases** deleted by coding agents despite freeze instructions
+- **$2.3M** in fraudulent wire transfers approved by AI assistants
+- **1,184 malicious agent skills** found on package registries
+
+Every incident had the same root cause: **nobody verified what the agent was about to do.**
+
+Observability tools watch *after*. Security tools *block everything*. Preflight **verifies the plan and only blocks what's actually dangerous.**
+
+---
+
+## How It Works
+
+Every time your agent tries to do something — send an email, delete a record, make an API call — Preflight intercepts it:
 
 ```
 Your agent wants to: delete_database_records(table="users", env="prod")
@@ -33,41 +48,26 @@ Preflight says:
              Try reading first, then deleting with a WHERE clause."
 ```
 
-Low-risk actions (reading files, fetching profiles) pass through **silently**. No popups. No interruptions. Your agent runs at full speed.
+Low-risk actions pass through **silently**. High-risk actions get **blocked with safer alternatives**.
 
-High-risk actions (deleting data, sending money, running shell commands) get **blocked with suggestions** for safer alternatives.
-
-You only see Preflight when it matters.
-
----
-
-## Why this exists
-
-Real incidents. Real money lost.
-
-- **$47K** burned by a recursive agent loop running 11 days unnoticed
-- **Production databases** deleted by coding agents despite freeze instructions
-- **$2.3M** in fraudulent wire transfers approved by AI assistants
-- **1,184 malicious agent skills** found on package registries
-
-Every incident had the same root cause: **nobody saw what the agent was about to do.**
-
-Observability tools watch *after*. Security tools *block everything*. Preflight **shows you the plan and only blocks what's actually dangerous.**
+| Risk Level | What Happens | Example |
+|-----------|-------------|---------|
+| **Low** (0-30%) | Passes silently | `get_user()`, `read_file()`, `search()` |
+| **Medium** (30-60%) | Warning + allows | `update_database()`, `send_notification()` |
+| **High** (60-80%) | Blocks + suggests alternative | `delete_records()`, `exec_shell()` |
+| **Critical** (80%+) | Hard block + correction | `drop_table()`, `wire_transfer()` |
 
 ---
 
-## Works with everything
+## Works With Everything
 
 ### OpenClaw (1 line)
-
 ```python
 from agent_preflight.integrations.openclaw import enable_preflight
 enable_preflight()
-# all OpenClaw tool calls are now governed
 ```
 
-### OpenAI function calling
-
+### OpenAI Function Calling
 ```python
 from agent_preflight.integrations.openai_hook import PreflightOpenAI
 
@@ -78,8 +78,7 @@ hook.capture_from_response(response)
 plan = hook.build_plan(task="Send report")
 ```
 
-### Anthropic tool use
-
+### Anthropic Tool Use
 ```python
 from agent_preflight.integrations.anthropic_hook import PreflightAnthropic
 
@@ -91,52 +90,44 @@ plan = hook.build_plan(task="Search users")
 ```
 
 ### LangChain / LangGraph
-
 ```python
 from agent_preflight.integrations.langchain import PreflightCallbackHandler
 
 handler = PreflightCallbackHandler(Preflight())
 agent.invoke({"input": "Organize tasks"}, config={"callbacks": [handler.handler]})
-plan = handler.build_plan(task="Organize tasks")
 ```
 
-### Any Python agent
-
+### CrewAI
 ```python
-from agent_preflight import Preflight
+from agent_preflight.integrations.crewai_hook import PreflightCrewAI
 
-pf = Preflight()
-
-@pf.intercept
-def send_email(to, subject, body):
-    smtp.send(to, subject, body)
-
-@pf.intercept
-def delete_records(table, condition):
-    db.execute(f"DELETE FROM {table} WHERE {condition}")
-
-plan = pf.dry_run(my_workflow, task="Clean up old data")
-print(pf.format(plan))  # see everything before it runs
-plan.approve()
-plan.execute()
+hook = PreflightCrewAI()
+safe_tool = hook.wrap_tool(my_tool)
+# Use safe_tool in your CrewAI agent — all calls are governed
 ```
 
-### Zero config auto-detect
-
+### AutoGen
 ```python
-# Detects installed frameworks and wraps them automatically
+from agent_preflight.integrations.autogen_hook import PreflightAutoGen
+
+hook = PreflightAutoGen()
+safe_functions = hook.wrap_function_map(my_function_map)
+# Pass safe_functions to your AutoGen agent
+```
+
+### Zero Config Auto-Detect
+```python
 from agent_preflight.auto import enable
 enable()  # wraps OpenClaw, LangChain, CrewAI, AutoGen — whatever's installed
 ```
 
-Or set an environment variable:
 ```bash
 PREFLIGHT_AUTO=1 python my_agent.py
 ```
 
 ---
 
-## The full pipeline (for the technically curious)
+## The Pipeline
 
 When Preflight intercepts an action, it runs through 6 stages in under 5ms for low-risk actions:
 
@@ -147,16 +138,16 @@ Agent action
 1. INTENT COMPILER -----> Validates what the agent says it's doing
     |
     v
-2. RISK ENGINE (<1ms) --> Weighted scoring: destructive? irreversible? financial?
-    |                      shell execution? sensitive paths? low confidence?
+2. RISK ENGINE (<1ms) --> 12-feature weighted scoring with sigmoid normalization
+    |                      Destructive? Irreversible? Financial? Shell? Sensitive path?
     v
 3. SIMULATION ENGINE ---> Monte Carlo: 50-200 rollouts simulating failure scenarios
-    |                      "What if network is slow? Memory is low? Load is high?"
+    |                      Wilson confidence intervals for statistical rigor
     v
-4. DRIFT INTELLIGENCE --> "Have we seen similar actions fail before?"
-    |                      Anomaly detection against historical patterns
+4. DRIFT INTELLIGENCE --> Isolation-forest anomaly detection against historical patterns
+    |
     v
-5. POLICY ENGINE -------> YAML rules: "No prod deletes", "Max $500 spend"
+5. POLICY ENGINE -------> YAML/Python rules: "No prod deletes", "Max $500 spend"
     |
     v
 6. MIRROR WORLD --------> Runs action in sandbox, compares result to declared intent
@@ -164,11 +155,11 @@ Agent action
     v
 VERDICT: ALLOW / WARN / BLOCK
     |
-    +-- If ALLOWED: Issues signed Action Passport (HMAC-SHA256, tamper-proof)
+    +-- If ALLOWED: Issues Ed25519-signed Action Passport (tamper-proof)
     +-- If BLOCKED: Returns correction with safer alternatives
 ```
 
-### Risk scoring
+### Risk Scoring
 
 Pure computation, no LLM calls. Runs in under 1ms.
 
@@ -181,14 +172,12 @@ Pure computation, no LLM calls. Runs in under 1ms.
 | Sensitive path | 2.0x | `.env`, `/etc/`, `prod`, `credentials` |
 | High cost | 1.8x | Estimated cost > $100 |
 | Low confidence | 1.5x | Agent confidence < 50% |
-| Drift similarity | 2.0x | Similar to past failures |
+| Drift anomaly | 2.0x | Similar to past failures |
 
-Score = sigmoid(weighted_sum + bias) -> 0.0 to 1.0
+### Monte Carlo Simulation
 
-### Monte Carlo simulation
-
-Runs 50-200 simulated scenarios with random perturbations:
-- Filesystem cascades (deleting a file that other files depend on)
+50-200 simulated scenarios with random perturbations:
+- Filesystem cascades (deleting files that other files depend on)
 - API cost explosions (retry loops that multiply costs)
 - Dependency breaks (removing packages other services need)
 - Memory runaway (operations that eat all available RAM)
@@ -196,37 +185,125 @@ Runs 50-200 simulated scenarios with random perturbations:
 
 Returns failure probability, cascade risk, and volatility index.
 
-### Action Passports
+---
 
-Every allowed action gets a signed, tamper-proof audit artifact:
+## Enterprise Features
 
-```json
-{
-  "passport_id": "a1b2c3d4...",
-  "agent_id": "my-agent",
-  "tool_name": "update_database",
-  "risk_score": 0.12,
-  "verdict": "allow",
-  "signature": "hmac-sha256:e4f5a6b7..."
-}
+### Preflight Kernel
+
+The enterprise execution layer adds cryptographic verification, compliance infrastructure, and multi-tenant isolation.
+
+#### Ed25519 Cryptographic Signatures
+Every action gets dual-signed with Ed25519 asymmetric keys (falls back to HMAC-SHA256 for zero-dependency mode). Key rotation, revocation, and public key distribution for independent verification.
+
+```python
+from trust_kernel.crypto import CryptoProvider
+
+crypto = CryptoProvider()
+receipt = crypto.create_receipt(
+    action_id="act-001",
+    agent_id="deploy-bot",
+    pre_state_hash="aabb...",
+    post_state_hash="ccdd...",
+    verdict="allow",
+    risk_score=0.15,
+)
+assert crypto.verify_receipt(receipt)  # independent verification
 ```
 
-Verifiable. Auditable. Compliance-ready.
+#### Append-Only Liability Ledger
+Chain-hashed, tamper-evident audit trail. Every record links to the previous via SHA-256 chain hash. Integrity verification detects any tampering.
+
+#### Multi-Tenant Architecture
+Organization, team, and project isolation. Separate ledgers, policies, and budgets per tenant. RBAC with Admin, Operator, Auditor, and Viewer roles.
+
+```python
+from trust_kernel.multitenancy import TenantManager, RBACManager
+
+tm = TenantManager()
+tenant, api_key = tm.create_tenant("Acme Corp", tier="enterprise")
+
+rbac = RBACManager()
+rbac.bind_user("alice", tenant.tenant_id, role="operator")
+rbac.bind_user("bob", tenant.tenant_id, role="auditor")
+```
+
+#### M-of-N Operator Consensus
+High-risk actions require multiple human approvals before execution. Signed votes with cryptographic non-repudiation.
+
+#### Deterministic Replay
+Reproduce any past execution exactly. Export replay manifests for forensic analysis.
+
+#### Cost Governance
+Per-tenant budget caps, token tracking, API call limits, and recursion depth controls.
 
 ---
 
-## Smart interruptions
+## Observability
 
-Preflight doesn't ask "are you sure?" for everything. That's annoying and useless.
+### Prometheus Metrics
+```bash
+curl http://localhost:8000/metrics
+# preflight_actions_total, preflight_risk_score, preflight_pipeline_duration_seconds
+```
 
-| Risk level | What happens | Example |
-|-----------|-------------|---------|
-| **Low** (0-30%) | Passes silently | `get_user()`, `read_file()`, `search()` |
-| **Medium** (30-60%) | Warning + allows | `update_database()`, `send_notification()` |
-| **High** (60-80%) | Blocks + suggests alternative | `delete_records()`, `exec_shell()` |
-| **Critical** (80%+) | Hard block + correction | `drop_table()`, `wire_transfer()` |
+### Structured Logging
+JSON-structured audit trails with rotation and retention.
 
-If the **user** explicitly asked the agent to do something, Preflight gives it more trust. If the **agent** decided to do it autonomously, Preflight is more cautious.
+### OpenTelemetry Spans
+OTLP-compatible span export for Datadog, Grafana, New Relic, or any OTel backend.
+
+### Safety Snapshots
+Shareable HTML safety reports with risk distribution charts and SVG badges.
+
+```bash
+curl http://localhost:8000/snapshot/badge.svg
+```
+
+---
+
+## Deployment
+
+### Docker
+```bash
+docker build -t preflight .
+docker run -p 8000:8000 preflight
+```
+
+### Docker Compose (with Prometheus + Grafana)
+```bash
+docker-compose up
+# Preflight: localhost:8000
+# Prometheus: localhost:9090
+# Grafana: localhost:3000
+```
+
+### Kubernetes (Helm)
+```bash
+helm install preflight deploy/helm/preflight/
+# HPA autoscaling: 2-10 replicas based on CPU/memory
+```
+
+### GitHub Action
+Add Preflight to your CI/CD pipeline. Every PR gets a safety score comment:
+```yaml
+# See .github/workflows/preflight-gate.yml
+```
+
+---
+
+## Webhook Notifications
+
+Real-time alerts when high-risk actions are detected:
+
+```python
+from agent_preflight.notifications.webhooks import NotificationManager
+
+nm = NotificationManager()
+nm.add_slack("https://hooks.slack.com/services/...")
+nm.add_webhook("https://your-api.com/alerts")
+# Automatic retry with exponential backoff + dead letter queue
+```
 
 ---
 
@@ -234,135 +311,58 @@ If the **user** explicitly asked the agent to do something, Preflight gives it m
 
 ```bash
 preflight demo                    # interactive demo
-preflight atf                     # full ATF pipeline demo
+preflight atf                     # full pipeline demo
 preflight serve --port 8100       # start REST API server
 preflight dashboard --port 8200   # start monitoring dashboard
 preflight check script.py         # analyze a script's agent actions
 preflight audit ./trail           # view audit history
-preflight enable --openclaw       # show OpenClaw integration guide
 preflight auto                    # auto-detect and enable for all frameworks
 preflight version                 # show version
 ```
 
-### REST API
-
-```bash
-# Start the server
-preflight serve --port 8100
-
-# Evaluate an action
-curl -X POST http://localhost:8100/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_id": "my-agent",
-    "tool_name": "delete_records",
-    "arguments": {"table": "users"},
-    "intent": {
-      "goal": "Clean up inactive users",
-      "reasoning_summary": "Monthly cleanup",
-      "irreversible": true,
-      "confidence": 0.6
-    }
-  }'
-
-# View passports
-curl http://localhost:8100/passports
-
-# Pipeline stats
-curl http://localhost:8100/stats
-```
-
-### Dashboard
-
-```bash
-preflight dashboard --port 8200
-# Open http://localhost:8200
-```
-
-Real-time monitoring with action timeline, risk charts, passport logs, and policy violations.
-
 ---
 
-## Policy engine
-
-Define rules in Python or YAML. Think OPA (Open Policy Agent) for AI agents.
+## Policy Engine
 
 ```python
 from agent_preflight import PolicyEngine, Policy, RiskLevel, ActionType
 
 engine = PolicyEngine()
-
-# Block dangerous operations
 engine.add(Policy.deny("No DROP TABLE").when_args_match(r"DROP TABLE"))
 engine.add(Policy.deny("No critical risk").when(risk_level=RiskLevel.CRITICAL))
-
-# Require human review
 engine.add(Policy.require_approval("Review deletes").when(action_type=ActionType.DELETE))
-
-# Budget enforcement
 engine.add(Policy.budget_limit("Max $50", max_cost=50.0))
-
-# Prevent infinite loops
-engine.add(Policy.max_actions("Too many actions", limit=20))
-
-# Custom rules
-engine.add(
-    Policy.deny("No external emails")
-    .when_custom(lambda a: a.name == "send_email" and "gmail" in str(a.args))
-)
-
-result = engine.evaluate(plan)
-if result.blocked:
-    print(result.summary())
 ```
 
 ---
 
-## Audit trail
+## REST API
 
-Every action. Every decision. Every passport. Queryable.
-
-```python
-from agent_preflight import AuditLog
-
-audit = AuditLog("./preflight.db", backend="sqlite")
-
-# Record
-audit.record(plan, verdict="approved", actor="deploy-bot@acme.com")
-
-# Query
-recent = audit.query(last_n=10)
-critical = audit.query(risk_level=RiskLevel.CRITICAL)
-denied = audit.query(verdict="denied")
-```
-
----
-
-## LLM-powered semantic analysis
-
-Go beyond pattern matching. Use an LLM to reason about what your agent is actually doing.
-
-```python
-from agent_preflight import SemanticAnalyzer
-
-analyzer = SemanticAnalyzer(provider="openai", model="gpt-4")
-analysis = analyzer.analyze(plan)
-
-print(analysis.summary)           # Overall risk assessment
-print(analysis.concerns)          # Specific safety concerns
-print(analysis.recommendations)   # How to reduce risk
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/execute` | Evaluate action through the full pipeline |
+| `GET` | `/ledger` | Query the liability ledger |
+| `GET` | `/ledger/verify` | Verify ledger chain integrity |
+| `GET` | `/ledger/export/json` | Export for auditors |
+| `GET` | `/consensus/pending` | Pending approval requests |
+| `POST` | `/consensus/{id}/approve` | Approve a high-risk action |
+| `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/keys/public` | Public keys for verification |
+| `POST` | `/keys/rotate/{role}` | Rotate signing keys |
+| `GET` | `/snapshot/badge.svg` | SVG safety badge |
+| `GET` | `/health` | Component health status |
+| `GET` | `/stats` | Execution statistics |
 
 ---
 
 ## Install
 
 ```bash
-pip install agent-preflight                # core (zero dependencies except pydantic)
+pip install agent-preflight                # core (zero deps beyond pydantic)
 pip install agent-preflight[openai]        # + OpenAI integration
 pip install agent-preflight[anthropic]     # + Anthropic integration
 pip install agent-preflight[langchain]     # + LangChain integration
-pip install agent-preflight[server]        # + FastAPI server & dashboard
+pip install agent-preflight[server]        # + FastAPI server
 pip install agent-preflight[all]           # everything
 ```
 
@@ -373,88 +373,71 @@ Python 3.10+. Zero required dependencies beyond pydantic.
 ## Architecture
 
 ```
-agent_preflight/
-├── core.py                 # Preflight engine (sync + async)
-├── models.py               # ActionCapture, Plan, DependencyGraph
-├── classifiers.py          # Heuristic risk classifiers
-├── renderer.py             # Terraform-style terminal output
-├── policy.py               # Policy engine with rule DSL
-├── audit.py                # Audit trail (JSON + SQLite)
-├── semantic.py             # LLM-powered semantic analysis
-├── auto.py                 # Universal auto-detect for all frameworks
-├── cli.py                  # CLI entry point
-├── atf/                    # Autonomous Trust Fabric
-│   ├── gateway.py          # Central orchestrator
-│   ├── risk_engine.py      # Fast risk scoring (<1ms)
-│   ├── intent_compiler.py  # Intent validation & embedding
-│   ├── simulation.py       # Monte Carlo engine
-│   ├── drift.py            # Anomaly detection
-│   ├── mirror_world.py     # Sandbox execution
-│   ├── passport.py         # HMAC-signed audit artifacts
-│   ├── feedback.py         # Correction suggestions
-│   ├── policy_v2.py        # YAML-based policy engine
-│   ├── database.py         # SQLite persistence
-│   └── plugins/            # Simulation domain plugins
-│       ├── filesystem.py   # Filesystem cascade detection
-│       ├── api_cost.py     # API cost explosion
-│       ├── dependency.py   # Dependency graph analysis
-│       ├── memory.py       # Memory runaway detection
-│       └── infrastructure.py  # Infrastructure mutation
-├── integrations/
-│   ├── openclaw.py         # OpenClaw (zero-config)
-│   ├── openai_hook.py      # OpenAI function calling
-│   ├── anthropic_hook.py   # Anthropic tool_use
-│   └── langchain.py        # LangChain callback
-├── federation/             # Cross-org risk sharing (experimental)
-└── dashboard/              # Real-time monitoring UI
+agent_preflight/              # Developer Layer
+├── core.py                   # Preflight engine (sync + async)
+├── auto.py                   # Zero-config framework detection
+├── atf/                      # Pipeline engine
+│   ├── risk_engine.py        # <1ms risk scoring (12 features)
+│   ├── simulation.py         # Monte Carlo (50-200 rollouts)
+│   ├── drift.py              # Anomaly detection
+│   ├── mirror_world.py       # Sandbox execution
+│   ├── passport.py           # Signed Action Passports
+│   ├── policy_v2.py          # YAML policy engine
+│   └── plugins/              # Domain simulation plugins
+├── integrations/             # Framework hooks
+│   ├── openclaw.py           # OpenClaw (1 line)
+│   ├── openai_hook.py        # OpenAI function calling
+│   ├── anthropic_hook.py     # Anthropic tool_use
+│   ├── langchain.py          # LangChain / LangGraph
+│   ├── crewai_hook.py        # CrewAI
+│   └── autogen_hook.py       # AutoGen
+├── notifications/            # Slack, Teams, webhooks
+└── federation/               # Cross-org risk sharing
+
+trust_kernel/                 # Enterprise Layer
+├── kernel.py                 # 13-stage orchestrator
+├── crypto.py                 # Ed25519 + HMAC-SHA256 signing
+├── ledger.py                 # Chain-hashed liability ledger
+├── multitenancy.py           # Tenant isolation + RBAC
+├── consensus.py              # M-of-N operator consensus
+├── observability.py          # Prometheus, OTel, logging
+├── snapshot.py               # Safety reports + SVG badges
+├── api.py                    # REST API with auth + rate limiting
+├── planner.py                # DAG execution planning
+├── rollback.py               # Atomic rollback
+├── cost_governor.py          # Budget enforcement
+└── reproducibility.py        # Deterministic replay
 ```
 
 ---
 
-## API reference
+## Specifications
 
-### `Preflight(auto_classify=True, max_actions=100, cost_limit=None)`
-
-Core engine. Intercepts, classifies, and plans.
-
-### `@pf.intercept` / `@pf.intercept(cost=0.05, reversible=False)`
-
-Decorator to register tools for interception.
-
-### `pf.dry_run(run_fn, task="")` / `await pf.async_dry_run(run_fn, task="")`
-
-Capture all tool calls without executing them. Returns a `Plan`.
-
-### `Plan`
-
-- `.actions` — List of captured actions
-- `.overall_risk` — Highest risk level
-- `.irreversible_count` — Number of irreversible actions
-- `.warnings` — Auto-generated warnings
-- `.dependency_graph` — Execution order, cycles, critical path
-- `.approve()` / `.execute()` — Gate and run
-- `.to_json()` — Export for CI/CD
-
-### `enable_preflight(mode="safe")`
-
-One-line OpenClaw integration. Returns `OpenClawPreflight` instance.
-
-### `ATFGateway`
-
-Full pipeline orchestrator with risk engine, simulation, drift detection, policy enforcement, mirror world, and passport issuance.
+- [Action Passport v1.0](specs/action-passport-v1.0.json) — Cryptographically signed audit artifact standard
 
 ---
 
 ## Roadmap
 
-- [ ] MCP (Model Context Protocol) tool wrapper
-- [ ] GitHub Action for CI/CD gating
-- [ ] Webhook notifications (Slack, Teams)
-- [ ] Multi-agent fleet management
-- [ ] Federation network for cross-org risk sharing
-- [ ] CrewAI native integration
-- [ ] AutoGen native integration
-- [ ] VS Code extension
+- [x] OpenClaw, OpenAI, Anthropic, LangChain integrations
+- [x] CrewAI and AutoGen native integrations
+- [x] Webhook notifications (Slack, Teams) with retry + dead letter queue
+- [x] GitHub Action for CI/CD safety gating
+- [x] Ed25519 cryptographic signatures with key management
+- [x] Multi-tenant architecture with RBAC
+- [x] Prometheus metrics + OpenTelemetry spans
+- [x] Kubernetes Helm chart with HPA autoscaling
+- [x] Docker + Docker Compose deployment
+- [x] Action Passport v1.0 specification
+- [x] Safety Snapshot generator (HTML, SVG badges)
+- [x] Performance benchmark suite (p50/p95/p99)
+- [ ] MCP (Model Context Protocol) server + middleware
+- [ ] Node.js / TypeScript SDK
+- [ ] VS Code extension with inline risk display
+- [ ] PostgreSQL ledger backend
+- [ ] Preflight Cloud (hosted SaaS)
+- [ ] AI Near-Miss Index (public safety statistics)
+- [ ] Multi-agent fleet dashboard
 
 ---
 

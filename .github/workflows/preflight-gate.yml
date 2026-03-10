@@ -1,0 +1,173 @@
+name: Preflight Safety Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      risk_threshold:
+        description: 'Maximum acceptable risk score (0.0 - 1.0)'
+        required: false
+        default: '0.7'
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  preflight-scan:
+    name: Preflight Risk Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Preflight
+        run: |
+          pip install -e ".[dev]"
+
+      - name: Analyze Changed Files
+        id: analyze
+        run: |
+          python -c "
+          import json, subprocess, sys
+          from agent_preflight.atf.risk_engine import RiskEngine
+          from agent_preflight.atf.models import ActionEnvelope, StructuredIntent
+
+          engine = RiskEngine()
+          threshold = float('${{ github.event.inputs.risk_threshold || 0.7 }}')
+
+          # Get changed files
+          if '${{ github.event_name }}' == 'pull_request':
+              base = '${{ github.event.pull_request.base.sha }}'
+              head = '${{ github.event.pull_request.head.sha }}'
+          else:
+              base = 'HEAD~1'
+              head = 'HEAD'
+
+          try:
+              result = subprocess.run(
+                  ['git', 'diff', '--name-only', base, head],
+                  capture_output=True, text=True, check=True,
+              )
+              changed = result.stdout.strip().split('\n')
+          except subprocess.CalledProcessError:
+              changed = []
+
+          results = []
+          max_risk = 0.0
+          blocked = 0
+
+          for f in changed:
+              if not f.strip():
+                  continue
+              # Determine risk characteristics
+              is_config = any(f.endswith(ext) for ext in ['.yml', '.yaml', '.toml', '.json', '.env'])
+              is_deploy = any(k in f for k in ['deploy', 'docker', 'k8s', 'helm', 'terraform', '.github'])
+              is_delete = False  # Can't determine from diff alone
+
+              intent = StructuredIntent(
+                  goal=f'Modify {f}',
+                  reasoning_summary='PR change analysis',
+                  expected_state_changes=[f'modify {f}'],
+                  external_calls=[],
+                  irreversible=is_deploy,
+                  estimated_cost=0.0,
+                  confidence=0.8,
+              )
+
+              envelope = ActionEnvelope(
+                  agent_id='github-actions',
+                  tool_name='file_write' if not is_delete else 'file_delete',
+                  arguments={'path': f},
+                  intent=intent,
+              )
+
+              score = engine.assess(envelope)
+              risk = score.composite_score if hasattr(score, 'composite_score') else 0.0
+              verdict = 'block' if risk > threshold else 'warn' if risk > 0.4 else 'allow'
+
+              if verdict == 'block':
+                  blocked += 1
+              max_risk = max(max_risk, risk)
+
+              results.append({
+                  'file': f,
+                  'risk_score': round(risk, 4),
+                  'verdict': verdict,
+              })
+
+          output = {
+              'files_analyzed': len(results),
+              'max_risk': round(max_risk, 4),
+              'blocked': blocked,
+              'threshold': threshold,
+              'pass': blocked == 0,
+              'details': results,
+          }
+
+          print(json.dumps(output, indent=2))
+
+          # Set outputs
+          with open('$GITHUB_OUTPUT' if '$GITHUB_OUTPUT' else '/dev/null', 'a') as f:
+              f.write(f'pass={\"true\" if blocked == 0 else \"false\"}\n')
+              f.write(f'max_risk={max_risk:.4f}\n')
+              f.write(f'blocked={blocked}\n')
+              f.write(f'analyzed={len(results)}\n')
+
+          if blocked > 0:
+              sys.exit(1)
+          " 2>&1 || echo "pass=false" >> "$GITHUB_OUTPUT"
+
+      - name: Run Tests
+        run: |
+          python -m pytest tests/ -v --tb=short -q
+
+      - name: Comment PR with Results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pass = '${{ steps.analyze.outputs.pass }}' === 'true';
+            const maxRisk = '${{ steps.analyze.outputs.max_risk }}' || '0';
+            const blocked = '${{ steps.analyze.outputs.blocked }}' || '0';
+            const analyzed = '${{ steps.analyze.outputs.analyzed }}' || '0';
+
+            const emoji = pass ? '✅' : '🚫';
+            const status = pass ? 'PASSED' : 'BLOCKED';
+
+            const body = [
+              `## ${emoji} Preflight Safety Gate — ${status}`,
+              '',
+              `| Metric | Value |`,
+              `|--------|-------|`,
+              `| Files Analyzed | ${analyzed} |`,
+              `| Max Risk Score | ${maxRisk} |`,
+              `| Blocked Changes | ${blocked} |`,
+              '',
+              pass
+                ? '> All changes passed the Preflight safety gate.'
+                : '> ⚠️ Some changes exceeded the risk threshold and were blocked.',
+              '',
+              '---',
+              '*Powered by [Preflight](https://github.com/apexpdl/agent-preflight) Execution Firewall*',
+            ].join('\n');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body,
+            });

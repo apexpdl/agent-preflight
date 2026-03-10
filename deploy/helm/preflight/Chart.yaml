@@ -1,0 +1,17 @@
+apiVersion: v2
+name: preflight
+description: Preflight Execution Firewall for AI Agents — Helm Chart
+type: application
+version: 2.0.0
+appVersion: "2.0.0"
+maintainers:
+  - name: Apex Poudel
+    url: https://github.com/apexpdl
+keywords:
+  - ai
+  - safety
+  - execution-firewall
+  - agents
+  - preflight
+sources:
+  - https://github.com/apexpdl/agent-preflight

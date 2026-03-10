@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-preflight"
-version = "1.1.0"
-description = "OpenAura — The AI safety and execution ecosystem. Agent Preflight for real-time risk scoring and simulation. TrustKernel for cryptographically verifiable, deterministic AI execution."
+version = "2.0.0"
+description = "Preflight — The execution firewall for AI agents. Real-time risk scoring, cryptographic audit trails, deterministic execution, and enterprise-grade safety infrastructure."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -18,7 +18,7 @@ keywords = [
     "langchain", "openai", "anthropic", "openclaw", "mcp", "policy",
     "compliance", "enterprise", "protocol", "trustkernel", "cryptography",
     "deterministic", "execution", "rollback", "ledger", "consensus",
-    "crewai", "autogen", "openaura",
+    "crewai", "autogen", "firewall", "ed25519", "multitenancy",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -60,7 +60,7 @@ Issues = "https://github.com/apexpdl/agent-preflight/issues"
 
 [project.scripts]
 preflight = "agent_preflight.cli:main"
-aura = "agent_preflight.cli:main"
+preflight-server = "trust_kernel.api:create_trustkernel_api"
 
 [tool.setuptools.packages.find]
 include = ["agent_preflight*", "trust_kernel*"]
